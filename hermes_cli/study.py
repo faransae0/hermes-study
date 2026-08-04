@@ -9,6 +9,7 @@ entry point that ``hermes_cli/main.py`` forwards into (mirrors
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 import uuid
 
@@ -20,11 +21,24 @@ from tools.study_ingest_tool import ingest_source
 
 def _cmd_subject_create(args) -> None:
     subject_id = state.create_subject(args.title, args.description or "")
+    if args.json:
+        print(json.dumps(state.get_subject(subject_id)))
+        return
     print(f"Created subject {subject_id}: {args.title}")
 
 
 def _cmd_subject_list(args) -> None:
     subjects = state.list_subjects()
+    if args.json:
+        print(json.dumps([
+            {
+                "id": s["id"],
+                "title": s["title"],
+                "source_count": len(state.list_sources_for_subject(s["id"])),
+            }
+            for s in subjects
+        ]))
+        return
     if not subjects:
         print("No subjects yet. Create one with: hermes study subject create <title>")
         return
@@ -33,16 +47,19 @@ def _cmd_subject_list(args) -> None:
         print(f"{subject['id']}  {subject['title']}  ({source_count} source(s))")
 
 
-def _require_subject(subject_id: str) -> dict:
-    subject = state.get_subject(subject_id)
+def _require_subject(args) -> dict:
+    subject = state.get_subject(args.subject_id)
     if subject is None:
-        print(f"No subject found with id {subject_id!r}. Run: hermes study subject list")
+        if getattr(args, "json", False):
+            print(json.dumps({"error": f"No subject found with id {args.subject_id!r}"}))
+        else:
+            print(f"No subject found with id {args.subject_id!r}. Run: hermes study subject list")
         sys.exit(1)
     return subject
 
 
 def _cmd_ingest(args) -> None:
-    _require_subject(args.subject_id)
+    _require_subject(args)
 
     print(f"Ingesting {args.source_type} source: {args.origin}")
     result = asyncio.run(ingest_source(args.subject_id, args.source_type, args.origin))
@@ -53,7 +70,7 @@ def _cmd_ingest(args) -> None:
 
 
 def _cmd_notes(args) -> None:
-    _require_subject(args.subject_id)
+    _require_subject(args)
 
     notes = state.list_notes_for_subject(args.subject_id)
     if not notes:
@@ -92,7 +109,7 @@ def _cmd_chat(args) -> None:
 
     _require_tty("study chat")
 
-    subject = _require_subject(args.subject_id)
+    subject = _require_subject(args)
     notes = state.list_notes_for_subject(args.subject_id)
     system_message = _build_chat_system_message(subject, notes)
 

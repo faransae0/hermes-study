@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from unittest.mock import patch
 
 import pytest
@@ -27,6 +28,7 @@ def _ns(**kw):
         subject_id=None,
         source_type=None,
         origin=None,
+        json=False,
     )
     defaults.update(kw)
     return argparse.Namespace(**defaults)
@@ -48,6 +50,43 @@ def test_subject_create_defaults_empty_description(db_path):
 
     subjects = state.list_subjects(db_path=db_path)
     assert subjects[0]["description"] == ""
+
+
+def test_subject_create_json_output(db_path, capsys):
+    cmd_study(_ns(study_command="subject", study_subject_command="create", title="Biology", description="Cells", json=True))
+
+    out = json.loads(capsys.readouterr().out)
+    assert out["title"] == "Biology"
+    assert out["description"] == "Cells"
+    assert out["id"]
+    assert out["created_at"]
+
+
+def test_subject_list_json_output(db_path, capsys):
+    state.create_subject("Alpha", db_path=db_path)
+    state.create_subject("Beta", db_path=db_path)
+
+    cmd_study(_ns(study_command="subject", study_subject_command="list", json=True))
+
+    out = json.loads(capsys.readouterr().out)
+    assert {s["title"] for s in out} == {"Alpha", "Beta"}
+    assert all(set(s.keys()) == {"id", "title", "source_count"} for s in out)
+
+
+def test_subject_list_json_empty(db_path, capsys):
+    cmd_study(_ns(study_command="subject", study_subject_command="list", json=True))
+
+    out = json.loads(capsys.readouterr().out)
+    assert out == []
+
+
+def test_require_subject_json_error_via_ingest(db_path, capsys):
+    with pytest.raises(SystemExit):
+        cmd_study(_ns(study_command="ingest", subject_id="nope", source_type="url", origin="https://x.com", json=True))
+
+    out = json.loads(capsys.readouterr().out)
+    assert "error" in out
+    assert "nope" in out["error"]
 
 
 def test_subject_list_prints_each_subject(db_path, capsys):

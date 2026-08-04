@@ -48,11 +48,21 @@ def build_study_parser(subparsers, *, cmd_study: Callable) -> None:
         default=None,
         help="Optional longer description of the Subject",
     )
+    subject_create_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output JSON instead of human-readable text",
+    )
     subject_create_parser.set_defaults(func=cmd_study)
 
     subject_list_parser = subject_subparsers.add_parser(
         "list",
         help="List all Subjects",
+    )
+    subject_list_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output JSON instead of human-readable text",
     )
     subject_list_parser.set_defaults(func=cmd_study)
     subject_parser.set_defaults(func=cmd_study)
