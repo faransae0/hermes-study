@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from tools.study_ingest_tool import extract_from_pdf, extract_from_url
+from tools.study_ingest_tool import _parse_vtt, extract_from_pdf, extract_from_url, extract_from_youtube
 
 
 @pytest.mark.asyncio
@@ -119,6 +119,77 @@ async def test_extract_from_pdf_lazy_install_unavailable(tmp_path):
         side_effect=FeatureUnavailable("study.pdf", ("pdfplumber",), "lazy installs disabled"),
     ):
         result = await extract_from_pdf(str(fake_pdf))
+
+    assert result["success"] is False
+    assert "lazy installs disabled" in result["error"]
+
+
+def test_parse_vtt_dedupes_rolling_captions(tmp_path):
+    vtt_path = tmp_path / "captions.vtt"
+    vtt_path.write_text(
+        "WEBVTT\n\n"
+        "00:00:00.000 --> 00:00:02.000\n"
+        "Hello there\n\n"
+        "00:00:02.000 --> 00:00:04.000\n"
+        "Hello there\n\n"
+        "00:00:04.000 --> 00:00:06.000\n"
+        "Hello there general\n\n",
+        encoding="utf-8",
+    )
+
+    text = _parse_vtt(str(vtt_path))
+    assert text == "Hello there general"
+
+
+@pytest.mark.asyncio
+async def test_extract_from_youtube_uses_captions_when_available(tmp_path):
+    def fake_extract_info(self, url, download=True):
+        # Simulate yt-dlp writing a caption file into the configured outtmpl dir.
+        out_dir = Path(self.params["outtmpl"]["default"]).parent
+        (out_dir / "video.en.vtt").write_text(
+            "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nCaptioned content\n\n", encoding="utf-8"
+        )
+        return {"title": "My Video"}
+
+    with patch("tools.lazy_deps.ensure"), patch("yt_dlp.YoutubeDL.extract_info", new=fake_extract_info):
+        result = await extract_from_youtube("https://youtube.com/watch?v=abc123")
+
+    assert result == {"success": True, "text": "Captioned content", "title": "My Video", "error": ""}
+
+
+@pytest.mark.asyncio
+async def test_extract_from_youtube_falls_back_to_audio_transcription(tmp_path):
+    call_count = {"n": 0}
+
+    def fake_extract_info(self, url, download=True):
+        call_count["n"] += 1
+        out_dir = Path(self.params["outtmpl"]["default"]).parent
+        if call_count["n"] == 2:
+            # Second call is the audio-only download pass.
+            (out_dir / "audio.m4a").write_bytes(b"fake audio bytes")
+        return {"title": "No Captions Video"}
+
+    fake_transcribe_result = {"success": True, "transcript": "Transcribed speech.", "error": ""}
+
+    with (
+        patch("tools.lazy_deps.ensure"),
+        patch("yt_dlp.YoutubeDL.extract_info", new=fake_extract_info),
+        patch("tools.transcription_tools.transcribe_audio", return_value=fake_transcribe_result),
+    ):
+        result = await extract_from_youtube("https://youtube.com/watch?v=noCaptions")
+
+    assert result == {"success": True, "text": "Transcribed speech.", "title": "No Captions Video", "error": ""}
+
+
+@pytest.mark.asyncio
+async def test_extract_from_youtube_lazy_install_unavailable():
+    from tools.lazy_deps import FeatureUnavailable
+
+    with patch(
+        "tools.lazy_deps.ensure",
+        side_effect=FeatureUnavailable("study.youtube", ("yt-dlp",), "lazy installs disabled"),
+    ):
+        result = await extract_from_youtube("https://youtube.com/watch?v=abc123")
 
     assert result["success"] is False
     assert "lazy installs disabled" in result["error"]

@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import tempfile
 from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
@@ -85,3 +87,122 @@ async def extract_from_pdf(file_path: str) -> Dict[str, Any]:
         }
 
     return {"success": True, "text": text, "title": path.name, "error": ""}
+
+
+_VTT_TS_RE = re.compile(
+    r"(\d{2}):(\d{2}):(\d{2})[.,](\d{3})\s+-->\s+(\d{2}):(\d{2}):(\d{2})[.,](\d{3})"
+)
+_VTT_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _parse_vtt(vtt_path: str) -> str:
+    """Parse a WebVTT subtitle file into deduplicated plain text.
+
+    YouTube auto-captions emit rolling-duplicate cues (each line appears
+    2-3 times as it scrolls); consecutive identical/prefix cues are
+    merged. Adapted from the /watch Claude Code skill's transcribe.py
+    dedupe logic.
+    """
+    from pathlib import Path
+
+    lines = Path(vtt_path).read_text(encoding="utf-8", errors="ignore").splitlines()
+    cues: list[str] = []
+    i = 0
+    while i < len(lines):
+        if not _VTT_TS_RE.match(lines[i]):
+            i += 1
+            continue
+        i += 1
+        cue_lines = []
+        while i < len(lines) and lines[i].strip():
+            cleaned = _VTT_TAG_RE.sub("", lines[i]).strip()
+            if cleaned:
+                cue_lines.append(cleaned)
+            i += 1
+        cue_text = " ".join(cue_lines).strip()
+        if cue_text:
+            if cues and cue_text == cues[-1]:
+                pass
+            elif cues and cue_text.startswith(cues[-1] + " "):
+                cues[-1] = cue_text
+            else:
+                cues.append(cue_text)
+        i += 1
+    return "\n".join(cues)
+
+
+async def extract_from_youtube(url: str) -> Dict[str, Any]:
+    """Extract a transcript from a YouTube/video URL: captions first, audio+STT fallback."""
+    from pathlib import Path
+
+    from tools import lazy_deps
+
+    try:
+        lazy_deps.ensure("study.youtube", prompt=False)
+    except lazy_deps.FeatureUnavailable as exc:
+        return {"success": False, "text": "", "title": "", "error": str(exc)}
+
+    import yt_dlp
+
+    with tempfile.TemporaryDirectory(prefix="hermes-study-yt-") as tmpdir:
+        tmp_path = Path(tmpdir)
+        title = ""
+
+        caption_opts = {
+            "skip_download": True,
+            "writesubtitles": True,
+            "writeautomaticsub": True,
+            "subtitleslangs": ["en"],
+            "subtitlesformat": "vtt",
+            "outtmpl": str(tmp_path / "video.%(ext)s"),
+            "quiet": True,
+            "no_warnings": True,
+        }
+        try:
+            with yt_dlp.YoutubeDL(caption_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                title = (info or {}).get("title", "")
+        except Exception as exc:
+            return {"success": False, "text": "", "title": "", "error": f"yt-dlp caption fetch failed: {exc}"}
+
+        vtt_files = sorted(tmp_path.glob("*.vtt"))
+        if vtt_files:
+            text = _parse_vtt(str(vtt_files[0]))
+            if text.strip():
+                return {"success": True, "text": text, "title": title, "error": ""}
+
+        # No usable captions — fall back to downloading audio and transcribing it.
+        audio_opts = {
+            "format": "bestaudio/best",
+            "outtmpl": str(tmp_path / "audio.%(ext)s"),
+            "quiet": True,
+            "no_warnings": True,
+        }
+        try:
+            with yt_dlp.YoutubeDL(audio_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                title = title or (info or {}).get("title", "")
+        except Exception as exc:
+            return {"success": False, "text": "", "title": title, "error": f"yt-dlp audio download failed: {exc}"}
+
+        audio_files = list(tmp_path.glob("audio.*"))
+        if not audio_files:
+            return {
+                "success": False,
+                "text": "",
+                "title": title,
+                "error": "No captions available and audio download produced no file",
+            }
+
+        from tools.transcription_tools import transcribe_audio
+
+        transcription = transcribe_audio(str(audio_files[0]))
+        if not transcription.get("success"):
+            return {
+                "success": False,
+                "text": "",
+                "title": title,
+                "error": transcription.get("error") or "Transcription failed",
+            }
+
+        return {"success": True, "text": transcription.get("transcript", ""), "title": title, "error": ""}
