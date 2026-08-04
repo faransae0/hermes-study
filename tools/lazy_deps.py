@@ -311,6 +311,13 @@ LAZY_DEPS: dict[str, tuple[str, ...]] = {
     # (tests/test_project_metadata.py enforces both). When bumping: update
     # here AND `uv lock --upgrade-package huggingface-hub` in lockstep.
     "tool.trace_upload": ("huggingface-hub==1.24.0",),
+    # study-desktop PDF ingestion — text extraction from uploaded PDFs.
+    # Not in uv.lock (verified 2026-08-03), so no shared-version hazard;
+    # test_every_lazy_deps_exact_pin_matches_uv_lock skips unlocked packages.
+    "study.pdf": ("pdfplumber==0.11.10",),
+    # study-desktop YouTube/video ingestion — caption fetch + audio fallback
+    # download via yt-dlp's Python API. Also not in uv.lock.
+    "study.youtube": ("yt-dlp==2026.7.4",),
 }
 
 
