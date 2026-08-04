@@ -112,4 +112,21 @@ def build_study_parser(subparsers, *, cmd_study: Callable) -> None:
     chat_parser.add_argument("subject_id", help="Subject id (see: hermes study subject list)")
     chat_parser.set_defaults(func=cmd_study)
 
+    # --- chat-turn -------------------------------------------------------
+    chat_turn_parser = study_subparsers.add_parser(
+        "chat-turn",
+        help="Non-interactive single-turn chat, for programmatic callers (e.g. the desktop app)",
+        description=(
+            "Send one message and get one JSON reply, grounded in a Subject's current "
+            "notes: {\"reply\": str, \"error\": null} on success, or "
+            "{\"reply\": null, \"error\": str} on failure. Unlike `hermes study chat`, "
+            "each call rebuilds context from scratch (no frozen-until-restart behavior) "
+            "and is not interactive."
+        ),
+    )
+    chat_turn_parser.add_argument("subject_id", help="Subject id (see: hermes study subject list)")
+    chat_turn_parser.add_argument("--message", required=True, help="The user's message for this turn")
+    chat_turn_parser.set_defaults(json=True)
+    chat_turn_parser.set_defaults(func=cmd_study)
+
     study_parser.set_defaults(func=cmd_study)

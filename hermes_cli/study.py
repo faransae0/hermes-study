@@ -193,6 +193,60 @@ def _cmd_chat(args) -> None:
         conversation_history = result.get("messages", conversation_history)
 
 
+def _cmd_chat_turn(args) -> None:
+    """Non-interactive single-turn chat: one message in, one JSON reply out.
+
+    Unlike the interactive `chat` REPL, this rebuilds the system message from
+    the Subject's CURRENT notes and uses a brand-new session on every call —
+    no session reuse, no frozen-context caveat to explain to a caller. Both
+    chat_messages rows are persisted together, only after a successful
+    run_conversation() call — persisting only the user turn on a failed call
+    would leave the next call's history reconstruction with two consecutive
+    "user" entries and no assistant reply between them.
+    """
+    subject = _require_subject(args)
+    notes = state.list_notes_for_subject(args.subject_id)
+    system_message = _build_chat_system_message(subject, notes)
+
+    history = [
+        {"role": m["role"], "content": m["content"]}
+        for m in state.list_chat_messages_for_subject(args.subject_id)
+    ]
+
+    agent = AIAgent(
+        session_id=uuid.uuid4().hex,
+        session_db=SessionDB(),
+        platform="study",
+        enabled_toolsets=[],
+        skip_context_files=True,
+        skip_memory=True,
+        quiet_mode=True,
+    )
+
+    try:
+        result = agent.run_conversation(
+            user_message=args.message,
+            system_message=system_message,
+            conversation_history=history,
+        )
+    except Exception as exc:
+        print(json.dumps({"reply": None, "error": str(exc)}))
+        return
+
+    if result.get("failed") or result.get("error"):
+        print(json.dumps({"reply": None, "error": result.get("error") or "request failed"}))
+        return
+
+    reply = result.get("final_response") or ""
+    if not reply:
+        print(json.dumps({"reply": None, "error": "empty response from model"}))
+        return
+
+    state.add_chat_message(args.subject_id, "user", args.message)
+    state.add_chat_message(args.subject_id, "assistant", reply)
+    print(json.dumps({"reply": reply, "error": None}))
+
+
 def cmd_study(args) -> None:
     """Dispatch ``hermes study`` subcommands to their handlers."""
     command = getattr(args, "study_command", None)
@@ -210,5 +264,7 @@ def cmd_study(args) -> None:
         return _cmd_notes(args)
     if command == "chat":
         return _cmd_chat(args)
+    if command == "chat-turn":
+        return _cmd_chat_turn(args)
     print("Usage: hermes study <subject|ingest|notes|chat>")
     sys.exit(1)
