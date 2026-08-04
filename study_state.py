@@ -16,6 +16,7 @@ pattern exists to prevent.
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import sqlite3
 import uuid
@@ -199,3 +200,46 @@ def list_sources_for_subject(subject_id: str, *, db_path: Optional[Path] = None)
             "SELECT * FROM sources WHERE subject_id = ? ORDER BY added_at ASC", (subject_id,)
         ).fetchall()
     return [_row_to_source(row) for row in rows]
+
+
+def _row_to_note(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "source_id": row["source_id"],
+        "summary_md": row["summary_md"],
+        "key_concepts": json.loads(row["key_concepts"]),
+        "generated_at": row["generated_at"],
+    }
+
+
+def upsert_note(
+    source_id: str, summary_md: str, key_concepts: list[str], *, db_path: Optional[Path] = None
+) -> str:
+    note_id = uuid.uuid4().hex
+    with connect_closing(db_path) as conn:
+        conn.execute("DELETE FROM notes WHERE source_id = ?", (source_id,))
+        conn.execute(
+            "INSERT INTO notes (id, source_id, summary_md, key_concepts, generated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (note_id, source_id, summary_md, json.dumps(key_concepts), _now()),
+        )
+        conn.commit()
+    return note_id
+
+
+def get_note_for_source(source_id: str, *, db_path: Optional[Path] = None) -> Optional[dict[str, Any]]:
+    with connect_closing(db_path) as conn:
+        row = conn.execute("SELECT * FROM notes WHERE source_id = ?", (source_id,)).fetchone()
+    return _row_to_note(row) if row is not None else None
+
+
+def list_notes_for_subject(subject_id: str, *, db_path: Optional[Path] = None) -> list[dict[str, Any]]:
+    with connect_closing(db_path) as conn:
+        rows = conn.execute(
+            "SELECT notes.* FROM notes "
+            "JOIN sources ON sources.id = notes.source_id "
+            "WHERE sources.subject_id = ? "
+            "ORDER BY notes.generated_at ASC",
+            (subject_id,),
+        ).fetchall()
+    return [_row_to_note(row) for row in rows]

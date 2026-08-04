@@ -86,3 +86,44 @@ def test_list_sources_for_subject_only_returns_that_subjects_sources(db_path):
 
     sources = state.list_sources_for_subject(subject_a, db_path=db_path)
     assert [s["id"] for s in sources] == [source_a]
+
+
+def test_upsert_note_then_get_note_for_source(db_path):
+    subject_id = state.create_subject("Math", db_path=db_path)
+    source_id = state.add_source(subject_id, "url", "https://example.com", db_path=db_path)
+
+    note_id = state.upsert_note(
+        source_id, "**Summary**\n\nDetails here.", ["derivatives", "limits"], db_path=db_path
+    )
+    assert note_id
+
+    note = state.get_note_for_source(source_id, db_path=db_path)
+    assert note["id"] == note_id
+    assert note["source_id"] == source_id
+    assert note["summary_md"] == "**Summary**\n\nDetails here."
+    assert note["key_concepts"] == ["derivatives", "limits"]
+
+
+def test_upsert_note_replaces_existing_note_for_same_source(db_path):
+    subject_id = state.create_subject("Math", db_path=db_path)
+    source_id = state.add_source(subject_id, "url", "https://example.com", db_path=db_path)
+
+    first_id = state.upsert_note(source_id, "first draft", ["a"], db_path=db_path)
+    second_id = state.upsert_note(source_id, "revised", ["a", "b"], db_path=db_path)
+
+    note = state.get_note_for_source(source_id, db_path=db_path)
+    assert note["summary_md"] == "revised"
+    assert note["key_concepts"] == ["a", "b"]
+    assert note["id"] == second_id
+    assert first_id != second_id  # confirms the old row was replaced, not left behind
+
+
+def test_list_notes_for_subject(db_path):
+    subject_id = state.create_subject("Math", db_path=db_path)
+    source_id = state.add_source(subject_id, "url", "https://example.com", db_path=db_path)
+    state.upsert_note(source_id, "summary", ["x"], db_path=db_path)
+
+    notes = state.list_notes_for_subject(subject_id, db_path=db_path)
+    assert len(notes) == 1
+    assert notes[0]["source_id"] == source_id
+    assert notes[0]["summary_md"] == "summary"
