@@ -69,6 +69,24 @@ def test_chat_parses_subject_id():
     assert args.subject_id == "abc123"
 
 
+def test_chat_turn_parses_subject_id_message_and_json_default():
+    root, _ = _build_root_parser()
+    args = root.parse_args(["study", "chat-turn", "abc123", "--message", "hello"])
+    assert args.study_command == "chat-turn"
+    assert args.subject_id == "abc123"
+    assert args.message == "hello"
+    assert args.json is True
+
+
+def test_chat_turn_requires_message():
+    root, _ = _build_root_parser()
+    try:
+        root.parse_args(["study", "chat-turn", "abc123"])
+        assert False, "expected SystemExit for missing required --message"
+    except SystemExit:
+        pass
+
+
 def test_all_leaf_commands_set_func_to_cmd_study():
     root, _ = _build_root_parser()
     for argv in (
@@ -77,6 +95,7 @@ def test_all_leaf_commands_set_func_to_cmd_study():
         ["study", "ingest", "s1", "pdf", "/tmp/x.pdf"],
         ["study", "notes", "s1"],
         ["study", "chat", "s1"],
+        ["study", "chat-turn", "s1", "--message", "hi"],
     ):
         args = root.parse_args(argv)
         assert callable(args.func)
