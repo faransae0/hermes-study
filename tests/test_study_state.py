@@ -143,3 +143,43 @@ def test_list_notes_for_subject(db_path):
     assert len(notes) == 1
     assert notes[0]["source_id"] == source_id
     assert notes[0]["summary_md"] == "summary"
+
+
+def test_add_chat_message_and_list_for_subject(db_path):
+    subject_id = state.create_subject("History", db_path=db_path)
+
+    state.add_chat_message(subject_id, "user", "What caused WWI?", db_path=db_path)
+    state.add_chat_message(subject_id, "assistant", "A mix of alliances and...", db_path=db_path)
+
+    messages = state.list_chat_messages_for_subject(subject_id, db_path=db_path)
+    assert [m["role"] for m in messages] == ["user", "assistant"]
+    assert messages[0]["content"] == "What caused WWI?"
+    assert all(m["subject_id"] == subject_id for m in messages)
+    assert all(m["created_at"] for m in messages)
+
+
+def test_add_chat_message_rejects_invalid_role(db_path):
+    subject_id = state.create_subject("History", db_path=db_path)
+    with pytest.raises(ValueError, match="invalid chat message role"):
+        state.add_chat_message(subject_id, "system", "nope", db_path=db_path)
+
+
+def test_list_chat_messages_isolated_per_subject(db_path):
+    subject_a = state.create_subject("Subject A", db_path=db_path)
+    subject_b = state.create_subject("Subject B", db_path=db_path)
+
+    state.add_chat_message(subject_a, "user", "message for A", db_path=db_path)
+    state.add_chat_message(subject_b, "user", "message for B", db_path=db_path)
+
+    messages_a = state.list_chat_messages_for_subject(subject_a, db_path=db_path)
+    assert len(messages_a) == 1
+    assert messages_a[0]["content"] == "message for A"
+
+
+def test_list_chat_messages_ordered_by_created_at(db_path):
+    subject_id = state.create_subject("Ordering", db_path=db_path)
+    for i in range(5):
+        state.add_chat_message(subject_id, "user", f"msg {i}", db_path=db_path)
+
+    messages = state.list_chat_messages_for_subject(subject_id, db_path=db_path)
+    assert [m["content"] for m in messages] == [f"msg {i}" for i in range(5)]

@@ -52,6 +52,15 @@ CREATE TABLE IF NOT EXISTS notes (
     key_concepts TEXT NOT NULL,
     generated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id TEXT PRIMARY KEY,
+    subject_id TEXT NOT NULL REFERENCES subjects(id),
+    role TEXT NOT NULL CHECK(role IN ('user','assistant')),
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_subject_id ON chat_messages(subject_id);
 """
 
 _INITIALIZED_PATHS: set[str] = set()
@@ -252,3 +261,40 @@ def list_notes_for_subject(subject_id: str, *, db_path: Optional[Path] = None) -
             (subject_id,),
         ).fetchall()
     return [_row_to_note(row) for row in rows]
+
+
+def _row_to_chat_message(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "subject_id": row["subject_id"],
+        "role": row["role"],
+        "content": row["content"],
+        "created_at": row["created_at"],
+    }
+
+
+def add_chat_message(
+    subject_id: str, role: str, content: str, *, db_path: Optional[Path] = None
+) -> str:
+    if role not in ("user", "assistant"):
+        raise ValueError(f"invalid chat message role: {role!r}")
+    message_id = uuid.uuid4().hex
+    with connect_closing(db_path) as conn:
+        conn.execute(
+            "INSERT INTO chat_messages (id, subject_id, role, content, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (message_id, subject_id, role, content, _now()),
+        )
+        conn.commit()
+    return message_id
+
+
+def list_chat_messages_for_subject(
+    subject_id: str, *, db_path: Optional[Path] = None
+) -> list[dict[str, Any]]:
+    with connect_closing(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM chat_messages WHERE subject_id = ? ORDER BY created_at ASC",
+            (subject_id,),
+        ).fetchall()
+    return [_row_to_chat_message(row) for row in rows]
