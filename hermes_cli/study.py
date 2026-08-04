@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import uuid
 
 import study_state as state
+from hermes_state import SessionDB
+from run_agent import AIAgent
 from tools.study_ingest_tool import ingest_source
 
 
@@ -63,10 +66,74 @@ def _cmd_notes(args) -> None:
         print("-" * 40)
 
 
+def _build_chat_system_message(subject: dict, notes: list[dict]) -> str:
+    if not notes:
+        return (
+            f"You are a study assistant helping the user learn about \"{subject['title']}\". "
+            "No sources have been ingested yet for this subject, so answer from general "
+            "knowledge and suggest the user add one with: hermes study ingest"
+        )
+    parts = [
+        f"You are a study assistant helping the user learn about \"{subject['title']}\". "
+        "Answer questions using the study notes below, which were summarized from sources "
+        "the user added to this subject. If a question falls outside these notes, say so "
+        "before answering from general knowledge.",
+        "",
+    ]
+    for i, note in enumerate(notes, start=1):
+        parts.append(f"--- Note {i} ---")
+        parts.append(note["summary_md"])
+        parts.append("")
+    return "\n".join(parts)
+
+
 def _cmd_chat(args) -> None:
-    _require_subject(args.subject_id)
-    print("hermes study chat is not implemented yet.")
-    sys.exit(1)
+    subject = _require_subject(args.subject_id)
+    notes = state.list_notes_for_subject(args.subject_id)
+    system_message = _build_chat_system_message(subject, notes)
+
+    agent = AIAgent(
+        session_id=uuid.uuid4().hex,
+        session_db=SessionDB(),
+        platform="study",
+        enabled_toolsets=[],
+        skip_context_files=True,
+        skip_memory=True,
+        quiet_mode=True,
+    )
+
+    print(f"Chatting about: {subject['title']}  (type 'exit' or Ctrl-D to quit)")
+    print(
+        "Note: sources ingested after this chat starts won't appear in its context — "
+        "restart the chat to pick them up.\n"
+    )
+
+    conversation_history: list = []
+    while True:
+        try:
+            user_input = input("> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+        if not user_input:
+            continue
+        if user_input.lower() in ("exit", "quit"):
+            break
+
+        state.add_chat_message(args.subject_id, "user", user_input)
+        # system_message is authoritative only on turn 1; conversation_loop.py's
+        # _restore_or_build_system_prompt reuses the persisted prompt verbatim
+        # on later turns of the same session for prefix-cache warmth, so passing
+        # it here on every turn is harmless and keeps the call uniform.
+        result = agent.run_conversation(
+            user_message=user_input,
+            system_message=system_message,
+            conversation_history=conversation_history,
+        )
+        reply = result.get("final_response", "")
+        print(reply)
+        state.add_chat_message(args.subject_id, "assistant", reply)
+        conversation_history = result.get("messages", conversation_history)
 
 
 def cmd_study(args) -> None:
