@@ -481,6 +481,7 @@ from hermes_cli.subcommands.pairing import build_pairing_parser
 from hermes_cli.subcommands.plugins import build_plugins_parser
 from hermes_cli.subcommands.mcp import build_mcp_parser
 from hermes_cli.subcommands.claw import build_claw_parser
+from hermes_cli.subcommands.study import build_study_parser
 
 
 def _require_tty(command_name: str) -> None:
@@ -10489,6 +10490,13 @@ def cmd_dashboard_register(args):
     _impl(args)
 
 
+def cmd_study(args):
+    """Run ``hermes study`` subcommands (subject/ingest/notes/chat)."""
+    from hermes_cli.study import cmd_study as _impl
+
+    _impl(args)
+
+
 def cmd_gateway_enroll(args):
     """Enroll a self-hosted gateway with a relay connector."""
     from hermes_cli.gateway_enroll import cmd_gateway_enroll as _impl
@@ -10581,7 +10589,7 @@ _BUILTIN_SUBCOMMANDS = frozenset(
         "project", "proxy",
         "prompt-size",
         "send", "sessions", "setup",
-        "skin", "skills", "slack", "status", "sync", "tools", "uninstall", "update",
+        "skin", "skills", "slack", "status", "study", "sync", "tools", "uninstall", "update",
         "version", "webhook", "whatsapp", "whatsapp-cloud", "chat", "secrets", "security",
         # Help-ish invocations — plugin commands not being listed in
         # top-level --help is an acceptable trade-off for skipping an
@@ -12394,6 +12402,11 @@ def main():
     # prompt-size command  (parser built in hermes_cli/subcommands/prompt_size.py)
     # =========================================================================
     build_prompt_size_parser(subparsers, cmd_prompt_size=cmd_prompt_size)
+
+    # =========================================================================
+    # study command  (parser built in hermes_cli/subcommands/study.py)
+    # =========================================================================
+    build_study_parser(subparsers, cmd_study=cmd_study)
 
     # =========================================================================
     # Parse and execute
