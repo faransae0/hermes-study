@@ -46,3 +46,42 @@ async def extract_from_url(url: str, *, char_limit: int = 15000) -> Dict[str, An
         return {"success": False, "text": "", "title": entry.get("title", ""), "error": entry["error"]}
 
     return {"success": True, "text": entry.get("content", ""), "title": entry.get("title", ""), "error": ""}
+
+
+async def extract_from_pdf(file_path: str) -> Dict[str, Any]:
+    """Extract text from a local PDF file via pdfplumber (lazy-installed)."""
+    from pathlib import Path
+
+    from tools import lazy_deps
+
+    path = Path(file_path)
+    if not path.is_file():
+        return {"success": False, "text": "", "title": path.name, "error": f"File not found: {file_path}"}
+
+    try:
+        lazy_deps.ensure("study.pdf", prompt=False)
+    except lazy_deps.FeatureUnavailable as exc:
+        return {"success": False, "text": "", "title": path.name, "error": str(exc)}
+
+    import pdfplumber
+
+    try:
+        pages = []
+        with pdfplumber.open(str(path)) as pdf:
+            for page in pdf.pages:
+                page_text = page.extract_text() or ""
+                if page_text.strip():
+                    pages.append(page_text)
+    except Exception as exc:
+        return {"success": False, "text": "", "title": path.name, "error": f"PDF extraction failed: {exc}"}
+
+    text = "\n\n".join(pages).strip()
+    if not text:
+        return {
+            "success": False,
+            "text": "",
+            "title": path.name,
+            "error": "No extractable text found (possibly a scanned/image-only PDF; OCR not supported yet)",
+        }
+
+    return {"success": True, "text": text, "title": path.name, "error": ""}

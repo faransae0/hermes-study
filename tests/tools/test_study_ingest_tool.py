@@ -1,11 +1,12 @@
 """Tests for tools.study_ingest_tool — per-source-type extraction + summarization."""
 
 import json
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from tools.study_ingest_tool import extract_from_url
+from tools.study_ingest_tool import extract_from_pdf, extract_from_url
 
 
 @pytest.mark.asyncio
@@ -48,3 +49,76 @@ async def test_extract_from_url_non_json_response():
 
     assert result["success"] is False
     assert "non-JSON" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_extract_from_pdf_missing_file():
+    result = await extract_from_pdf("/no/such/file.pdf")
+    assert result["success"] is False
+    assert "not found" in result["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_extract_from_pdf_success(tmp_path):
+    fake_pdf = tmp_path / "notes.pdf"
+    fake_pdf.write_bytes(b"%PDF-1.4 fake")  # content is irrelevant; pdfplumber.open is mocked
+
+    class FakePage:
+        def extract_text(self):
+            return "Page one text."
+
+    class FakePdf:
+        pages = [FakePage()]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    with patch("tools.lazy_deps.ensure"), patch("pdfplumber.open", return_value=FakePdf()):
+        result = await extract_from_pdf(str(fake_pdf))
+
+    assert result == {"success": True, "text": "Page one text.", "title": "notes.pdf", "error": ""}
+
+
+@pytest.mark.asyncio
+async def test_extract_from_pdf_no_extractable_text(tmp_path):
+    fake_pdf = tmp_path / "scanned.pdf"
+    fake_pdf.write_bytes(b"%PDF-1.4 fake")
+
+    class FakePage:
+        def extract_text(self):
+            return None
+
+    class FakePdf:
+        pages = [FakePage()]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    with patch("tools.lazy_deps.ensure"), patch("pdfplumber.open", return_value=FakePdf()):
+        result = await extract_from_pdf(str(fake_pdf))
+
+    assert result["success"] is False
+    assert "No extractable text" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_extract_from_pdf_lazy_install_unavailable(tmp_path):
+    from tools.lazy_deps import FeatureUnavailable
+
+    fake_pdf = tmp_path / "notes.pdf"
+    fake_pdf.write_bytes(b"%PDF-1.4 fake")
+
+    with patch(
+        "tools.lazy_deps.ensure",
+        side_effect=FeatureUnavailable("study.pdf", ("pdfplumber",), "lazy installs disabled"),
+    ):
+        result = await extract_from_pdf(str(fake_pdf))
+
+    assert result["success"] is False
+    assert "lazy installs disabled" in result["error"]
