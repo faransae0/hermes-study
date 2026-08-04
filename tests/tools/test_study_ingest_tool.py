@@ -257,3 +257,102 @@ async def test_summarize_source_llm_non_json_response():
 
     assert result["success"] is False
     assert "non-JSON" in result["error"]
+
+
+from pathlib import Path as _Path
+
+import study_state as state
+from tools.study_ingest_tool import ingest_source
+
+
+@pytest.fixture
+def ingest_db_path(tmp_path):
+    return tmp_path / "study.db"
+
+
+@pytest.mark.asyncio
+async def test_ingest_source_end_to_end_success(ingest_db_path, tmp_path, monkeypatch):
+    subject_id = state.create_subject("Astronomy", db_path=ingest_db_path)
+
+    monkeypatch.setattr(
+        "tools.study_ingest_tool.extract_from_url",
+        AsyncMock(return_value={"success": True, "text": "Stars are big.", "title": "Stars 101", "error": ""}),
+    )
+    monkeypatch.setattr(
+        "tools.study_ingest_tool.summarize_source",
+        AsyncMock(
+            return_value={
+                "success": True,
+                "summary_md": "**Stars are big.**\n\nDetails.",
+                "key_concepts": ["stars", "fusion"],
+                "error": "",
+            }
+        ),
+    )
+    # Route the raw-text cache into tmp_path instead of the real hermes home.
+    monkeypatch.setattr("hermes_constants.get_hermes_home", lambda: tmp_path)
+
+    result = await ingest_source(subject_id, "url", "https://example.com/stars", db_path=ingest_db_path)
+
+    assert result == {"success": True, "source_id": result["source_id"], "error": ""}
+
+    source = state.get_source(result["source_id"], db_path=ingest_db_path)
+    assert source["status"] == "ready"
+    assert source["raw_text_path"] is not None
+    assert _Path(source["raw_text_path"]).read_text(encoding="utf-8") == "Stars are big."
+
+    note = state.get_note_for_source(result["source_id"], db_path=ingest_db_path)
+    assert note["summary_md"] == "**Stars are big.**\n\nDetails."
+    assert note["key_concepts"] == ["stars", "fusion"]
+
+
+@pytest.mark.asyncio
+async def test_ingest_source_extraction_failure_marks_source_error(ingest_db_path):
+    subject_id = state.create_subject("Astronomy", db_path=ingest_db_path)
+
+    with patch(
+        "tools.study_ingest_tool.extract_from_url",
+        new=AsyncMock(return_value={"success": False, "text": "", "title": "", "error": "404 Not Found"}),
+    ):
+        result = await ingest_source(subject_id, "url", "https://example.com/broken", db_path=ingest_db_path)
+
+    assert result == {"success": False, "source_id": result["source_id"], "error": "404 Not Found"}
+    source = state.get_source(result["source_id"], db_path=ingest_db_path)
+    assert source["status"] == "error"
+    assert source["error_message"] == "404 Not Found"
+    assert state.get_note_for_source(result["source_id"], db_path=ingest_db_path) is None
+
+
+@pytest.mark.asyncio
+async def test_ingest_source_summarization_failure_preserves_extracted_text(ingest_db_path, tmp_path, monkeypatch):
+    subject_id = state.create_subject("Astronomy", db_path=ingest_db_path)
+
+    monkeypatch.setattr(
+        "tools.study_ingest_tool.extract_from_url",
+        AsyncMock(return_value={"success": True, "text": "Stars are big.", "title": "Stars 101", "error": ""}),
+    )
+    monkeypatch.setattr(
+        "tools.study_ingest_tool.summarize_source",
+        AsyncMock(return_value={"success": False, "summary_md": "", "key_concepts": [], "error": "LLM call failed"}),
+    )
+    monkeypatch.setattr("hermes_constants.get_hermes_home", lambda: tmp_path)
+
+    result = await ingest_source(subject_id, "url", "https://example.com/stars", db_path=ingest_db_path)
+
+    assert result["success"] is False
+    assert result["error"] == "LLM call failed"
+    source = state.get_source(result["source_id"], db_path=ingest_db_path)
+    assert source["status"] == "error"
+    # Extraction had already succeeded — raw text must still be cached, per the
+    # "extraction succeeded, only retry summary" error-handling rule in the spec.
+    assert source["raw_text_path"] is not None
+    assert _Path(source["raw_text_path"]).read_text(encoding="utf-8") == "Stars are big."
+
+
+@pytest.mark.asyncio
+async def test_ingest_source_unknown_type_rejected(ingest_db_path):
+    subject_id = state.create_subject("Astronomy", db_path=ingest_db_path)
+
+    result = await ingest_source(subject_id, "carrier-pigeon", "n/a", db_path=ingest_db_path)
+
+    assert result == {"success": False, "source_id": "", "error": "Unknown source type: carrier-pigeon"}

@@ -251,3 +251,69 @@ async def summarize_source(
     summary_md = f"**{one_line}**\n\n{detailed}" if one_line else detailed
 
     return {"success": True, "summary_md": summary_md, "key_concepts": concepts, "error": ""}
+
+
+_VALID_SOURCE_TYPES = ("url", "pdf", "youtube")
+
+
+def _cache_raw_text(source_id: str, text: str):
+    from hermes_constants import get_hermes_home
+
+    cache_dir = get_hermes_home() / "study" / "sources"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    path = cache_dir / f"{source_id}.txt"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+async def _run_extractor(source_type: str, origin: str) -> Dict[str, Any]:
+    # Dispatches by calling the module-level function names directly (not via
+    # a dict built at import time) so `monkeypatch.setattr` /
+    # `unittest.mock.patch` on "tools.study_ingest_tool.extract_from_*"
+    # actually takes effect — a dict literal captures the original function
+    # object at module-load time and would silently ignore any later patch
+    # of the module attribute of the same name.
+    if source_type == "url":
+        return await extract_from_url(origin)
+    if source_type == "pdf":
+        return await extract_from_pdf(origin)
+    if source_type == "youtube":
+        return await extract_from_youtube(origin)
+    raise ValueError(f"Unknown source type: {source_type}")  # unreachable: caller pre-validates
+
+
+async def ingest_source(
+    subject_id: str, source_type: str, origin: str, *, db_path=None
+) -> Dict[str, Any]:
+    """End-to-end: register a Source, extract, cache raw text, summarize, persist a Note.
+
+    Returns {"success": bool, "source_id": str, "error": str}. `source_id` is
+    "" only when `source_type` is invalid and no Source row was created.
+    """
+    import study_state as state
+
+    if source_type not in _VALID_SOURCE_TYPES:
+        return {"success": False, "source_id": "", "error": f"Unknown source type: {source_type}"}
+
+    source_id = state.add_source(subject_id, source_type, origin, db_path=db_path)
+    state.update_source_status(source_id, "extracting", db_path=db_path)
+
+    extraction = await _run_extractor(source_type, origin)
+
+    if not extraction["success"]:
+        state.update_source_status(source_id, "error", error_message=extraction["error"], db_path=db_path)
+        return {"success": False, "source_id": source_id, "error": extraction["error"]}
+
+    raw_text_path = _cache_raw_text(source_id, extraction["text"])
+    state.update_source_status(
+        source_id, "summarizing", raw_text_path=str(raw_text_path), db_path=db_path
+    )
+
+    summary = await summarize_source(extraction["text"], extraction["title"] or origin)
+    if not summary["success"]:
+        state.update_source_status(source_id, "error", error_message=summary["error"], db_path=db_path)
+        return {"success": False, "source_id": source_id, "error": summary["error"]}
+
+    state.upsert_note(source_id, summary["summary_md"], summary["key_concepts"], db_path=db_path)
+    state.update_source_status(source_id, "ready", db_path=db_path)
+    return {"success": True, "source_id": source_id, "error": ""}
