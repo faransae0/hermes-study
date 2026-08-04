@@ -78,6 +78,22 @@ def test_update_source_status_sets_raw_text_path(db_path):
     assert source["raw_text_path"] == "/cache/abc.txt"
 
 
+def test_update_source_status_clears_error_message_on_successful_retry(db_path):
+    subject_id = state.create_subject("Biology", db_path=db_path)
+    source_id = state.add_source(subject_id, "pdf", "/tmp/notes.pdf", db_path=db_path)
+
+    state.update_source_status(source_id, "error", error_message="corrupt file", db_path=db_path)
+    state.update_source_status(source_id, "extracting", raw_text_path="/cache/abc.txt", db_path=db_path)
+    state.update_source_status(source_id, "ready", db_path=db_path)
+
+    source = state.get_source(source_id, db_path=db_path)
+    assert source["status"] == "ready"
+    assert source["error_message"] is None
+    # raw_text_path keeps its existing COALESCE-preserve behavior — a retry
+    # succeeding should not wipe out previously-cached raw text.
+    assert source["raw_text_path"] == "/cache/abc.txt"
+
+
 def test_list_sources_for_subject_only_returns_that_subjects_sources(db_path):
     subject_a = state.create_subject("Subject A", db_path=db_path)
     subject_b = state.create_subject("Subject B", db_path=db_path)

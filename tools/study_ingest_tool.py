@@ -19,7 +19,7 @@ from typing import Any, Dict
 logger = logging.getLogger(__name__)
 
 
-async def extract_from_url(url: str, *, char_limit: int = 15000) -> Dict[str, Any]:
+async def extract_from_url(url: str, *, char_limit: int = 60000) -> Dict[str, Any]:
     """Extract clean page text from a single URL via the shared web_extract_tool."""
     from tools.web_tools import web_extract_tool
 
@@ -65,9 +65,9 @@ async def extract_from_pdf(file_path: str) -> Dict[str, Any]:
     except lazy_deps.FeatureUnavailable as exc:
         return {"success": False, "text": "", "title": path.name, "error": str(exc)}
 
-    import pdfplumber
-
     try:
+        import pdfplumber
+
         pages = []
         with pdfplumber.open(str(path)) as pdf:
             for page in pdf.pages:
@@ -142,7 +142,10 @@ async def extract_from_youtube(url: str) -> Dict[str, Any]:
     except lazy_deps.FeatureUnavailable as exc:
         return {"success": False, "text": "", "title": "", "error": str(exc)}
 
-    import yt_dlp
+    try:
+        import yt_dlp
+    except Exception as exc:
+        return {"success": False, "text": "", "title": "", "error": f"yt-dlp import failed: {exc}"}
 
     with tempfile.TemporaryDirectory(prefix="hermes-study-yt-") as tmpdir:
         tmp_path = Path(tmpdir)
@@ -227,8 +230,8 @@ async def summarize_source(
     if not check_api_key():
         return {"success": False, "summary_md": "", "key_concepts": [], "error": "OPENROUTER_API_KEY not set"}
 
-    client = get_async_client()
     try:
+        client = get_async_client()
         response = await client.chat.completions.create(
             model=model,
             messages=[
@@ -236,10 +239,10 @@ async def summarize_source(
                 {"role": "user", "content": f"# {title}\n\n{text[:60000]}"},
             ],
         )
+        raw = response.choices[0].message.content or ""
     except Exception as exc:
         return {"success": False, "summary_md": "", "key_concepts": [], "error": f"LLM call failed: {exc}"}
 
-    raw = response.choices[0].message.content or ""
     try:
         parsed = json.loads(raw)
     except (TypeError, ValueError) as exc:
@@ -256,10 +259,13 @@ async def summarize_source(
 _VALID_SOURCE_TYPES = ("url", "pdf", "youtube")
 
 
-def _cache_raw_text(source_id: str, text: str):
-    from hermes_constants import get_hermes_home
+def _cache_raw_text(source_id: str, text: str, *, db_path=None):
+    from pathlib import Path
 
-    cache_dir = get_hermes_home() / "study" / "sources"
+    import study_state
+
+    base_path = db_path if db_path is not None else study_state.study_db_path()
+    cache_dir = Path(base_path).parent / "study" / "sources"
     cache_dir.mkdir(parents=True, exist_ok=True)
     path = cache_dir / f"{source_id}.txt"
     path.write_text(text, encoding="utf-8")
@@ -267,12 +273,12 @@ def _cache_raw_text(source_id: str, text: str):
 
 
 async def _run_extractor(source_type: str, origin: str) -> Dict[str, Any]:
-    # Dispatches by calling the module-level function names directly (not via
-    # a dict built at import time) so `monkeypatch.setattr` /
-    # `unittest.mock.patch` on "tools.study_ingest_tool.extract_from_*"
-    # actually takes effect — a dict literal captures the original function
-    # object at module-load time and would silently ignore any later patch
-    # of the module attribute of the same name.
+    # Dispatches via if/elif rather than a module-level dict so
+    # `monkeypatch.setattr` / `unittest.mock.patch` on
+    # "tools.study_ingest_tool.extract_from_*" actually takes effect. A dict
+    # literal built once at import time would capture the original,
+    # unpatched function objects forever; the names below are looked up
+    # fresh on every call, so a patched module attribute is seen correctly.
     if source_type == "url":
         return await extract_from_url(origin)
     if source_type == "pdf":
@@ -288,32 +294,42 @@ async def ingest_source(
     """End-to-end: register a Source, extract, cache raw text, summarize, persist a Note.
 
     Returns {"success": bool, "source_id": str, "error": str}. `source_id` is
-    "" only when `source_type` is invalid and no Source row was created.
+    "" only when `source_type` is invalid or the Source row itself could not
+    be created (e.g. a nonexistent `subject_id`) — in both cases there is no
+    row to mark "error" against.
     """
     import study_state as state
 
     if source_type not in _VALID_SOURCE_TYPES:
         return {"success": False, "source_id": "", "error": f"Unknown source type: {source_type}"}
 
-    source_id = state.add_source(subject_id, source_type, origin, db_path=db_path)
-    state.update_source_status(source_id, "extracting", db_path=db_path)
+    try:
+        source_id = state.add_source(subject_id, source_type, origin, db_path=db_path)
+    except Exception as exc:
+        return {"success": False, "source_id": "", "error": f"Failed to create source: {exc}"}
 
-    extraction = await _run_extractor(source_type, origin)
+    try:
+        state.update_source_status(source_id, "extracting", db_path=db_path)
 
-    if not extraction["success"]:
-        state.update_source_status(source_id, "error", error_message=extraction["error"], db_path=db_path)
-        return {"success": False, "source_id": source_id, "error": extraction["error"]}
+        extraction = await _run_extractor(source_type, origin)
 
-    raw_text_path = _cache_raw_text(source_id, extraction["text"])
-    state.update_source_status(
-        source_id, "summarizing", raw_text_path=str(raw_text_path), db_path=db_path
-    )
+        if not extraction["success"]:
+            state.update_source_status(source_id, "error", error_message=extraction["error"], db_path=db_path)
+            return {"success": False, "source_id": source_id, "error": extraction["error"]}
 
-    summary = await summarize_source(extraction["text"], extraction["title"] or origin)
-    if not summary["success"]:
-        state.update_source_status(source_id, "error", error_message=summary["error"], db_path=db_path)
-        return {"success": False, "source_id": source_id, "error": summary["error"]}
+        raw_text_path = _cache_raw_text(source_id, extraction["text"], db_path=db_path)
+        state.update_source_status(
+            source_id, "summarizing", raw_text_path=str(raw_text_path), db_path=db_path
+        )
 
-    state.upsert_note(source_id, summary["summary_md"], summary["key_concepts"], db_path=db_path)
-    state.update_source_status(source_id, "ready", db_path=db_path)
-    return {"success": True, "source_id": source_id, "error": ""}
+        summary = await summarize_source(extraction["text"], extraction["title"] or origin)
+        if not summary["success"]:
+            state.update_source_status(source_id, "error", error_message=summary["error"], db_path=db_path)
+            return {"success": False, "source_id": source_id, "error": summary["error"]}
+
+        state.upsert_note(source_id, summary["summary_md"], summary["key_concepts"], db_path=db_path)
+        state.update_source_status(source_id, "ready", db_path=db_path)
+        return {"success": True, "source_id": source_id, "error": ""}
+    except Exception as exc:
+        state.update_source_status(source_id, "error", error_message=str(exc), db_path=db_path)
+        return {"success": False, "source_id": source_id, "error": str(exc)}

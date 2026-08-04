@@ -60,6 +60,7 @@ async def test_extract_from_pdf_missing_file():
 
 @pytest.mark.asyncio
 async def test_extract_from_pdf_success(tmp_path):
+    pytest.importorskip("pdfplumber")  # optional dep; lazy-installed
     fake_pdf = tmp_path / "notes.pdf"
     fake_pdf.write_bytes(b"%PDF-1.4 fake")  # content is irrelevant; pdfplumber.open is mocked
 
@@ -84,6 +85,7 @@ async def test_extract_from_pdf_success(tmp_path):
 
 @pytest.mark.asyncio
 async def test_extract_from_pdf_no_extractable_text(tmp_path):
+    pytest.importorskip("pdfplumber")  # optional dep; lazy-installed
     fake_pdf = tmp_path / "scanned.pdf"
     fake_pdf.write_bytes(b"%PDF-1.4 fake")
 
@@ -143,6 +145,8 @@ def test_parse_vtt_dedupes_rolling_captions(tmp_path):
 
 @pytest.mark.asyncio
 async def test_extract_from_youtube_uses_captions_when_available(tmp_path):
+    pytest.importorskip("yt_dlp")  # optional dep; lazy-installed
+
     def fake_extract_info(self, url, download=True):
         # Simulate yt-dlp writing a caption file into the configured outtmpl dir.
         out_dir = Path(self.params["outtmpl"]["default"]).parent
@@ -159,6 +163,7 @@ async def test_extract_from_youtube_uses_captions_when_available(tmp_path):
 
 @pytest.mark.asyncio
 async def test_extract_from_youtube_falls_back_to_audio_transcription(tmp_path):
+    pytest.importorskip("yt_dlp")  # optional dep; lazy-installed
     call_count = {"n": 0}
 
     def fake_extract_info(self, url, download=True):
@@ -356,3 +361,68 @@ async def test_ingest_source_unknown_type_rejected(ingest_db_path):
     result = await ingest_source(subject_id, "carrier-pigeon", "n/a", db_path=ingest_db_path)
 
     assert result == {"success": False, "source_id": "", "error": "Unknown source type: carrier-pigeon"}
+
+
+@pytest.mark.asyncio
+async def test_ingest_source_unexpected_extractor_exception_marks_source_error(ingest_db_path):
+    subject_id = state.create_subject("Astronomy", db_path=ingest_db_path)
+
+    with patch(
+        "tools.study_ingest_tool.extract_from_url",
+        new=AsyncMock(side_effect=RuntimeError("kaboom")),
+    ):
+        result = await ingest_source(subject_id, "url", "https://example.com/broken", db_path=ingest_db_path)
+
+    assert result["success"] is False
+    assert "kaboom" in result["error"]
+
+    source = state.get_source(result["source_id"], db_path=ingest_db_path)
+    # Must land on "error", not be stranded at the last successfully-set
+    # status ("extracting") from before the exception was raised.
+    assert source["status"] == "error"
+    assert "kaboom" in source["error_message"]
+
+
+@pytest.mark.asyncio
+async def test_ingest_source_nonexistent_subject_id_returns_clean_failure(ingest_db_path):
+    result = await ingest_source("does-not-exist", "url", "https://example.com", db_path=ingest_db_path)
+
+    assert result["success"] is False
+    assert result["source_id"] == ""
+    assert "Failed to create source" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_ingest_source_caches_raw_text_under_db_path_not_hermes_home(ingest_db_path, tmp_path, monkeypatch):
+    subject_id = state.create_subject("Astronomy", db_path=ingest_db_path)
+
+    # Decoy: get_hermes_home() points somewhere entirely different from
+    # ingest_db_path's parent, so the assertion below actually discriminates
+    # between "used db_path" and "fell back to get_hermes_home()".
+    decoy_home = tmp_path / "decoy-hermes-home"
+    monkeypatch.setattr("hermes_constants.get_hermes_home", lambda: decoy_home)
+
+    monkeypatch.setattr(
+        "tools.study_ingest_tool.extract_from_url",
+        AsyncMock(return_value={"success": True, "text": "Stars are big.", "title": "Stars 101", "error": ""}),
+    )
+    monkeypatch.setattr(
+        "tools.study_ingest_tool.summarize_source",
+        AsyncMock(
+            return_value={
+                "success": True,
+                "summary_md": "**Stars are big.**\n\nDetails.",
+                "key_concepts": ["stars", "fusion"],
+                "error": "",
+            }
+        ),
+    )
+
+    result = await ingest_source(subject_id, "url", "https://example.com/stars", db_path=ingest_db_path)
+
+    assert result["success"] is True
+    source = state.get_source(result["source_id"], db_path=ingest_db_path)
+    raw_text_path = _Path(source["raw_text_path"])
+
+    assert raw_text_path.is_relative_to(ingest_db_path.parent)
+    assert not raw_text_path.is_relative_to(decoy_home)

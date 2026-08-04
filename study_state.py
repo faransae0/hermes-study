@@ -157,13 +157,13 @@ def _row_to_source(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def add_source(subject_id: str, type: str, origin: str, *, db_path: Optional[Path] = None) -> str:
+def add_source(subject_id: str, source_type: str, origin: str, *, db_path: Optional[Path] = None) -> str:
     source_id = uuid.uuid4().hex
     with connect_closing(db_path) as conn:
         conn.execute(
             "INSERT INTO sources (id, subject_id, type, origin, status, added_at) "
             "VALUES (?, ?, ?, ?, 'pending', ?)",
-            (source_id, subject_id, type, origin, _now()),
+            (source_id, subject_id, source_type, origin, _now()),
         )
         conn.commit()
     return source_id
@@ -179,11 +179,20 @@ def update_source_status(
 ) -> None:
     with connect_closing(db_path) as conn:
         conn.execute(
-            "UPDATE sources SET status = ?, "
-            "error_message = COALESCE(?, error_message), "
-            "raw_text_path = COALESCE(?, raw_text_path) "
-            "WHERE id = ?",
-            (status, error_message, raw_text_path, source_id),
+            "UPDATE sources SET status = :status, "
+            "error_message = CASE "
+            "    WHEN :error_message IS NOT NULL THEN :error_message "
+            "    WHEN :status = 'error' THEN error_message "
+            "    ELSE NULL "
+            "END, "
+            "raw_text_path = COALESCE(:raw_text_path, raw_text_path) "
+            "WHERE id = :source_id",
+            {
+                "status": status,
+                "error_message": error_message,
+                "raw_text_path": raw_text_path,
+                "source_id": source_id,
+            },
         )
         conn.commit()
 
