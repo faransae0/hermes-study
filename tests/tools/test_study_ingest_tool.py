@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from tools.study_ingest_tool import _parse_vtt, extract_from_pdf, extract_from_url, extract_from_youtube
+from tools.study_ingest_tool import _parse_vtt, extract_from_pdf, extract_from_url, extract_from_youtube, summarize_source
 
 
 @pytest.mark.asyncio
@@ -193,3 +193,67 @@ async def test_extract_from_youtube_lazy_install_unavailable():
 
     assert result["success"] is False
     assert "lazy installs disabled" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_summarize_source_success():
+    fake_llm_json = json.dumps(
+        {
+            "one_line_summary": "Newton's laws describe motion.",
+            "key_concepts": ["inertia", "force", "momentum"],
+            "detailed_markdown": "## Overview\n\nNewton's three laws...",
+        }
+    )
+
+    fake_message = type("Msg", (), {"content": fake_llm_json})
+    fake_choice = type("Choice", (), {"message": fake_message})
+    fake_response = type("Response", (), {"choices": [fake_choice]})
+
+    fake_client = AsyncMock()
+    fake_client.chat.completions.create = AsyncMock(return_value=fake_response)
+
+    with (
+        patch("tools.openrouter_client.check_api_key", return_value=True),
+        patch("tools.openrouter_client.get_async_client", return_value=fake_client),
+    ):
+        result = await summarize_source("Newton's laws of motion...", "Physics 101")
+
+    assert result["success"] is True
+    assert "Newton's laws describe motion." in result["summary_md"]
+    assert "## Overview" in result["summary_md"]
+    assert result["key_concepts"] == ["inertia", "force", "momentum"]
+
+
+@pytest.mark.asyncio
+async def test_summarize_source_no_api_key():
+    with patch("tools.openrouter_client.check_api_key", return_value=False):
+        result = await summarize_source("some text", "Some Title")
+
+    assert result["success"] is False
+    assert "OPENROUTER_API_KEY" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_summarize_source_empty_text():
+    result = await summarize_source("", "Some Title")
+    assert result["success"] is False
+    assert "No text" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_summarize_source_llm_non_json_response():
+    fake_message = type("Msg", (), {"content": "not json"})
+    fake_choice = type("Choice", (), {"message": fake_message})
+    fake_response = type("Response", (), {"choices": [fake_choice]})
+
+    fake_client = AsyncMock()
+    fake_client.chat.completions.create = AsyncMock(return_value=fake_response)
+
+    with (
+        patch("tools.openrouter_client.check_api_key", return_value=True),
+        patch("tools.openrouter_client.get_async_client", return_value=fake_client),
+    ):
+        result = await summarize_source("some text", "Some Title")
+
+    assert result["success"] is False
+    assert "non-JSON" in result["error"]

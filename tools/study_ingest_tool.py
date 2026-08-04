@@ -206,3 +206,48 @@ async def extract_from_youtube(url: str) -> Dict[str, Any]:
             }
 
         return {"success": True, "text": transcription.get("transcript", ""), "title": title, "error": ""}
+
+
+SUMMARY_SYSTEM_PROMPT = """You are a study-notes assistant. Given raw extracted text from a study source, produce:
+1. A one-line summary (<=25 words).
+2. 3-7 key concepts, each as a short noun phrase.
+3. A detailed explanation in markdown (headings, bullet points), covering the source's main ideas at a level a student can study from directly.
+
+Respond as JSON: {"one_line_summary": str, "key_concepts": [str, ...], "detailed_markdown": str}. Output ONLY the JSON object, no other text."""
+
+
+async def summarize_source(
+    text: str, title: str, *, model: str = "google/gemini-3-flash-preview"
+) -> Dict[str, Any]:
+    """Summarize extracted source text into structured study notes via OpenRouter."""
+    from tools.openrouter_client import check_api_key, get_async_client
+
+    if not text.strip():
+        return {"success": False, "summary_md": "", "key_concepts": [], "error": "No text to summarize"}
+    if not check_api_key():
+        return {"success": False, "summary_md": "", "key_concepts": [], "error": "OPENROUTER_API_KEY not set"}
+
+    client = get_async_client()
+    try:
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
+                {"role": "user", "content": f"# {title}\n\n{text[:60000]}"},
+            ],
+        )
+    except Exception as exc:
+        return {"success": False, "summary_md": "", "key_concepts": [], "error": f"LLM call failed: {exc}"}
+
+    raw = response.choices[0].message.content or ""
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError) as exc:
+        return {"success": False, "summary_md": "", "key_concepts": [], "error": f"LLM returned non-JSON: {exc}"}
+
+    one_line = parsed.get("one_line_summary", "")
+    concepts = parsed.get("key_concepts", [])
+    detailed = parsed.get("detailed_markdown", "")
+    summary_md = f"**{one_line}**\n\n{detailed}" if one_line else detailed
+
+    return {"success": True, "summary_md": summary_md, "key_concepts": concepts, "error": ""}
