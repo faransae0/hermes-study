@@ -41,3 +41,48 @@ def test_connect_closing_actually_closes_connection(db_path):
         conn.execute("SELECT 1")
     with pytest.raises(Exception):
         conn.execute("SELECT 1")  # connection is closed, must raise
+
+
+def test_add_source_defaults_to_pending(db_path):
+    subject_id = state.create_subject("Biology", db_path=db_path)
+    source_id = state.add_source(subject_id, "url", "https://example.com/article", db_path=db_path)
+
+    source = state.get_source(source_id, db_path=db_path)
+    assert source["subject_id"] == subject_id
+    assert source["type"] == "url"
+    assert source["origin"] == "https://example.com/article"
+    assert source["status"] == "pending"
+    assert source["error_message"] is None
+    assert source["raw_text_path"] is None
+
+
+def test_update_source_status_sets_error_message(db_path):
+    subject_id = state.create_subject("Biology", db_path=db_path)
+    source_id = state.add_source(subject_id, "pdf", "/tmp/notes.pdf", db_path=db_path)
+
+    state.update_source_status(source_id, "error", error_message="corrupt file", db_path=db_path)
+
+    source = state.get_source(source_id, db_path=db_path)
+    assert source["status"] == "error"
+    assert source["error_message"] == "corrupt file"
+
+
+def test_update_source_status_sets_raw_text_path(db_path):
+    subject_id = state.create_subject("Biology", db_path=db_path)
+    source_id = state.add_source(subject_id, "url", "https://example.com", db_path=db_path)
+
+    state.update_source_status(source_id, "summarizing", raw_text_path="/cache/abc.txt", db_path=db_path)
+
+    source = state.get_source(source_id, db_path=db_path)
+    assert source["status"] == "summarizing"
+    assert source["raw_text_path"] == "/cache/abc.txt"
+
+
+def test_list_sources_for_subject_only_returns_that_subjects_sources(db_path):
+    subject_a = state.create_subject("Subject A", db_path=db_path)
+    subject_b = state.create_subject("Subject B", db_path=db_path)
+    source_a = state.add_source(subject_a, "url", "https://a.example.com", db_path=db_path)
+    state.add_source(subject_b, "url", "https://b.example.com", db_path=db_path)
+
+    sources = state.list_sources_for_subject(subject_a, db_path=db_path)
+    assert [s["id"] for s in sources] == [source_a]

@@ -141,3 +141,61 @@ def list_subjects(*, db_path: Optional[Path] = None) -> list[dict[str, Any]]:
     with connect_closing(db_path) as conn:
         rows = conn.execute("SELECT * FROM subjects ORDER BY created_at ASC").fetchall()
     return [_row_to_subject(row) for row in rows]
+
+
+def _row_to_source(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "subject_id": row["subject_id"],
+        "type": row["type"],
+        "origin": row["origin"],
+        "status": row["status"],
+        "error_message": row["error_message"],
+        "raw_text_path": row["raw_text_path"],
+        "added_at": row["added_at"],
+    }
+
+
+def add_source(subject_id: str, type: str, origin: str, *, db_path: Optional[Path] = None) -> str:
+    source_id = uuid.uuid4().hex
+    with connect_closing(db_path) as conn:
+        conn.execute(
+            "INSERT INTO sources (id, subject_id, type, origin, status, added_at) "
+            "VALUES (?, ?, ?, ?, 'pending', ?)",
+            (source_id, subject_id, type, origin, _now()),
+        )
+        conn.commit()
+    return source_id
+
+
+def update_source_status(
+    source_id: str,
+    status: str,
+    *,
+    error_message: Optional[str] = None,
+    raw_text_path: Optional[str] = None,
+    db_path: Optional[Path] = None,
+) -> None:
+    with connect_closing(db_path) as conn:
+        conn.execute(
+            "UPDATE sources SET status = ?, "
+            "error_message = COALESCE(?, error_message), "
+            "raw_text_path = COALESCE(?, raw_text_path) "
+            "WHERE id = ?",
+            (status, error_message, raw_text_path, source_id),
+        )
+        conn.commit()
+
+
+def get_source(source_id: str, *, db_path: Optional[Path] = None) -> Optional[dict[str, Any]]:
+    with connect_closing(db_path) as conn:
+        row = conn.execute("SELECT * FROM sources WHERE id = ?", (source_id,)).fetchone()
+    return _row_to_source(row) if row is not None else None
+
+
+def list_sources_for_subject(subject_id: str, *, db_path: Optional[Path] = None) -> list[dict[str, Any]]:
+    with connect_closing(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM sources WHERE subject_id = ? ORDER BY added_at ASC", (subject_id,)
+        ).fetchall()
+    return [_row_to_source(row) for row in rows]
