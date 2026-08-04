@@ -125,11 +125,23 @@ def _cmd_chat(args) -> None:
         # _restore_or_build_system_prompt reuses the persisted prompt verbatim
         # on later turns of the same session for prefix-cache warmth, so passing
         # it here on every turn is harmless and keeps the call uniform.
-        result = agent.run_conversation(
-            user_message=user_input,
-            system_message=system_message,
-            conversation_history=conversation_history,
-        )
+        try:
+            result = agent.run_conversation(
+                user_message=user_input,
+                system_message=system_message,
+                conversation_history=conversation_history,
+            )
+        except KeyboardInterrupt:
+            print()
+            break
+        except Exception as exc:
+            print(f"[chat error: {exc}]")
+            continue
+
+        if result.get("failed"):
+            print(f"[chat error: {result.get('error') or result.get('final_response') or 'request failed'}]")
+            continue
+
         reply = result.get("final_response", "")
         print(reply)
         state.add_chat_message(args.subject_id, "assistant", reply)

@@ -123,6 +123,33 @@ def test_chat_loop_passes_system_message_and_grows_history_across_turns(db_path)
     assert [m["role"] for m in messages] == ["user", "assistant", "user", "assistant"]
 
 
+def test_chat_loop_skips_persisting_failed_result(db_path, capsys):
+    subject_id = state.create_subject("Physics", db_path=db_path)
+
+    fake_agent = MagicMock()
+    fake_agent.run_conversation.return_value = {
+        "failed": True,
+        "error": "rate limit exceeded",
+        "final_response": "",
+        "messages": [],
+    }
+
+    with (
+        patch("hermes_cli.study.AIAgent", return_value=fake_agent),
+        patch("hermes_cli.study.SessionDB"),
+        patch("builtins.input", side_effect=["What is inertia?", "exit"]),
+    ):
+        cmd_study(_ns(subject_id=subject_id))
+
+    out = capsys.readouterr().out
+    assert "rate limit exceeded" in out
+
+    messages = state.list_chat_messages_for_subject(subject_id, db_path=db_path)
+    # user turn is persisted (matches normal chat UX — a failed message still
+    # shows in the transcript), but no assistant row was added for the failure
+    assert [m["role"] for m in messages] == ["user"]
+
+
 def test_chat_loop_exits_cleanly_on_eof(db_path):
     subject_id = state.create_subject("Physics", db_path=db_path)
 
