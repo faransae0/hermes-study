@@ -956,6 +956,21 @@ DEFAULT_CONFIG = {
             "extra_body": {},
             "reasoning_effort": "",  # per-task thinking level: none|minimal|low|medium|high|xhigh|max|ultra (empty = provider default)
         },
+        # Study-desktop source summarization — turns extracted raw text
+        # (web page / PDF / YouTube transcript) into structured study
+        # notes. Invoked by tools/study_ingest_tool.py's summarize_source()
+        # via `hermes study ingest`. A cheap, fast model is sufficient —
+        # this is a single structured-JSON-output call per source, not a
+        # multi-turn agent loop.
+        "study_summary": {
+            "provider": "auto",
+            "model": "",
+            "base_url": "",
+            "api_key": "",
+            "timeout": 120,
+            "extra_body": {},
+            "reasoning_effort": "",  # per-task thinking level: none|minimal|low|medium|high|xhigh|max|ultra (empty = provider default)
+        },
         # Kanban decomposer — decomposes a triage task into a graph of
         # child tasks routed to specialist profiles by description.
         # Invoked by ``hermes kanban decompose`` and the kanban

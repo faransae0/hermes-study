@@ -220,26 +220,31 @@ Respond as JSON: {"one_line_summary": str, "key_concepts": [str, ...], "detailed
 
 
 async def summarize_source(
-    text: str, title: str, *, model: str = "google/gemini-3-flash-preview"
+    text: str, title: str, *, model: str = "", timeout: float = 120
 ) -> Dict[str, Any]:
-    """Summarize extracted source text into structured study notes via OpenRouter."""
-    from tools.openrouter_client import check_api_key, get_async_client
+    """Summarize extracted source text into structured study notes.
 
+    Routes through ``agent.auxiliary_client.call_llm(task="study_summary", ...)``
+    so ``auxiliary.study_summary.*`` config (provider/model/base_url/extra_body/
+    reasoning_effort) applies uniformly with the rest of the codebase's
+    LLM-backed CLI tasks, instead of a hardcoded OpenRouter call.
+    """
     if not text.strip():
         return {"success": False, "summary_md": "", "key_concepts": [], "error": "No text to summarize"}
-    if not check_api_key():
-        return {"success": False, "summary_md": "", "key_concepts": [], "error": "OPENROUTER_API_KEY not set"}
 
     try:
-        client = get_async_client()
-        response = await client.chat.completions.create(
-            model=model,
+        from agent.auxiliary_client import call_llm, extract_content_or_reasoning
+
+        response = call_llm(
+            task="study_summary",
+            model=model or None,
             messages=[
                 {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
                 {"role": "user", "content": f"# {title}\n\n{text[:60000]}"},
             ],
+            timeout=timeout,
         )
-        raw = response.choices[0].message.content or ""
+        raw = extract_content_or_reasoning(response)
     except Exception as exc:
         return {"success": False, "summary_md": "", "key_concepts": [], "error": f"LLM call failed: {exc}"}
 

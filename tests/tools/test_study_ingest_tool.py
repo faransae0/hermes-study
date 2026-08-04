@@ -209,33 +209,27 @@ async def test_summarize_source_success():
             "detailed_markdown": "## Overview\n\nNewton's three laws...",
         }
     )
-
     fake_message = type("Msg", (), {"content": fake_llm_json})
     fake_choice = type("Choice", (), {"message": fake_message})
     fake_response = type("Response", (), {"choices": [fake_choice]})
 
-    fake_client = AsyncMock()
-    fake_client.chat.completions.create = AsyncMock(return_value=fake_response)
-
-    with (
-        patch("tools.openrouter_client.check_api_key", return_value=True),
-        patch("tools.openrouter_client.get_async_client", return_value=fake_client),
-    ):
+    with patch("agent.auxiliary_client.call_llm", return_value=fake_response) as mock_call_llm:
         result = await summarize_source("Newton's laws of motion...", "Physics 101")
 
     assert result["success"] is True
     assert "Newton's laws describe motion." in result["summary_md"]
     assert "## Overview" in result["summary_md"]
     assert result["key_concepts"] == ["inertia", "force", "momentum"]
+    assert mock_call_llm.call_args.kwargs["task"] == "study_summary"
 
 
 @pytest.mark.asyncio
-async def test_summarize_source_no_api_key():
-    with patch("tools.openrouter_client.check_api_key", return_value=False):
+async def test_summarize_source_llm_call_failure():
+    with patch("agent.auxiliary_client.call_llm", side_effect=RuntimeError("no provider configured")):
         result = await summarize_source("some text", "Some Title")
 
     assert result["success"] is False
-    assert "OPENROUTER_API_KEY" in result["error"]
+    assert "no provider configured" in result["error"]
 
 
 @pytest.mark.asyncio
@@ -251,13 +245,7 @@ async def test_summarize_source_llm_non_json_response():
     fake_choice = type("Choice", (), {"message": fake_message})
     fake_response = type("Response", (), {"choices": [fake_choice]})
 
-    fake_client = AsyncMock()
-    fake_client.chat.completions.create = AsyncMock(return_value=fake_response)
-
-    with (
-        patch("tools.openrouter_client.check_api_key", return_value=True),
-        patch("tools.openrouter_client.get_async_client", return_value=fake_client),
-    ):
+    with patch("agent.auxiliary_client.call_llm", return_value=fake_response):
         result = await summarize_source("some text", "Some Title")
 
     assert result["success"] is False
