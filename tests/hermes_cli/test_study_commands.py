@@ -161,3 +161,53 @@ def test_notes_no_notes_prints_hint(db_path, capsys):
     cmd_study(_ns(study_command="notes", subject_id=subject_id))
     out = capsys.readouterr().out
     assert "No notes yet" in out
+
+
+def test_ingest_json_output_success(db_path, capsys):
+    subject_id = state.create_subject("Chemistry", db_path=db_path)
+
+    async def _fake_ingest_source(*a, **kw):
+        return {"success": True, "source_id": "src-1", "error": ""}
+
+    with patch("hermes_cli.study.ingest_source", side_effect=_fake_ingest_source):
+        cmd_study(_ns(study_command="ingest", subject_id=subject_id, source_type="url", origin="https://x.com", json=True))
+
+    out = json.loads(capsys.readouterr().out)
+    assert out == {"success": True, "source_id": "src-1", "error": ""}
+
+
+def test_ingest_json_output_failure_exits_nonzero(db_path, capsys):
+    subject_id = state.create_subject("Chemistry", db_path=db_path)
+
+    async def _fake_ingest_source(*a, **kw):
+        return {"success": False, "source_id": "src-1", "error": "extraction failed"}
+
+    with patch("hermes_cli.study.ingest_source", side_effect=_fake_ingest_source):
+        with pytest.raises(SystemExit):
+            cmd_study(_ns(study_command="ingest", subject_id=subject_id, source_type="url", origin="https://x.com", json=True))
+
+    out = json.loads(capsys.readouterr().out)
+    assert out == {"success": False, "source_id": "src-1", "error": "extraction failed"}
+
+
+def test_notes_json_output(db_path, capsys):
+    subject_id = state.create_subject("History", db_path=db_path)
+    source_id = state.add_source(subject_id, "url", "https://x.com", db_path=db_path)
+    state.upsert_note(source_id, "**Overview**\n\nWWI began in 1914.", ["alliances", "1914"], db_path=db_path)
+
+    cmd_study(_ns(study_command="notes", subject_id=subject_id, json=True))
+
+    out = json.loads(capsys.readouterr().out)
+    assert len(out) == 1
+    assert out[0]["summary_md"] == "**Overview**\n\nWWI began in 1914."
+    assert out[0]["key_concepts"] == ["alliances", "1914"]
+    assert set(out[0].keys()) == {"id", "summary_md", "key_concepts", "generated_at"}
+
+
+def test_notes_json_output_empty(db_path, capsys):
+    subject_id = state.create_subject("History", db_path=db_path)
+
+    cmd_study(_ns(study_command="notes", subject_id=subject_id, json=True))
+
+    out = json.loads(capsys.readouterr().out)
+    assert out == []

@@ -79,6 +79,11 @@ def build_study_parser(subparsers, *, cmd_study: Callable) -> None:
     ingest_parser.add_argument("subject_id", help="Subject id (see: hermes study subject list)")
     ingest_parser.add_argument("source_type", choices=_SOURCE_TYPES, help="Type of source to ingest")
     ingest_parser.add_argument("origin", help="URL, or local file path for a PDF")
+    ingest_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output JSON instead of human-readable text",
+    )
     ingest_parser.set_defaults(func=cmd_study)
 
     # --- notes ---------------------------------------------------------------
@@ -87,6 +92,11 @@ def build_study_parser(subparsers, *, cmd_study: Callable) -> None:
         help="Print all generated notes for a Subject",
     )
     notes_parser.add_argument("subject_id", help="Subject id (see: hermes study subject list)")
+    notes_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output JSON instead of human-readable text",
+    )
     notes_parser.set_defaults(func=cmd_study)
 
     # --- chat ------------------------------------------------------------

@@ -61,8 +61,16 @@ def _require_subject(args) -> dict:
 def _cmd_ingest(args) -> None:
     _require_subject(args)
 
-    print(f"Ingesting {args.source_type} source: {args.origin}")
+    if not args.json:
+        print(f"Ingesting {args.source_type} source: {args.origin}")
     result = asyncio.run(ingest_source(args.subject_id, args.source_type, args.origin))
+
+    if args.json:
+        print(json.dumps(result))
+        if not result["success"]:
+            sys.exit(1)
+        return
+
     if not result["success"]:
         print(f"Ingest failed: {result['error']}")
         sys.exit(1)
@@ -73,6 +81,18 @@ def _cmd_notes(args) -> None:
     _require_subject(args)
 
     notes = state.list_notes_for_subject(args.subject_id)
+    if args.json:
+        print(json.dumps([
+            {
+                "id": n["id"],
+                "summary_md": n["summary_md"],
+                "key_concepts": n["key_concepts"],
+                "generated_at": n["generated_at"],
+            }
+            for n in notes
+        ]))
+        return
+
     if not notes:
         print("No notes yet for this subject.")
         return
