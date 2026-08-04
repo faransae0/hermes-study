@@ -190,6 +190,20 @@ def test_ingest_json_output_failure_exits_nonzero(db_path, capsys):
     assert out == {"success": False, "source_id": "src-1", "error": "extraction failed"}
 
 
+def test_ingest_json_mode_unexpected_exception_produces_json_not_crash(db_path, capsys):
+    subject_id = state.create_subject("Chemistry", db_path=db_path)
+
+    async def _raising_ingest_source(*a, **kw):
+        raise RuntimeError("disk full")
+
+    with patch("hermes_cli.study.ingest_source", side_effect=_raising_ingest_source):
+        with pytest.raises(SystemExit):
+            cmd_study(_ns(study_command="ingest", subject_id=subject_id, source_type="url", origin="https://x.com", json=True))
+
+    out = json.loads(capsys.readouterr().out)
+    assert out == {"error": "disk full"}
+
+
 def test_notes_json_output(db_path, capsys):
     subject_id = state.create_subject("History", db_path=db_path)
     source_id = state.add_source(subject_id, "url", "https://x.com", db_path=db_path)

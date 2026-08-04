@@ -205,32 +205,33 @@ def _cmd_chat_turn(args) -> None:
     "user" entries and no assistant reply between them.
     """
     subject = _require_subject(args)
-    notes = state.list_notes_for_subject(args.subject_id)
-    system_message = _build_chat_system_message(subject, notes)
-
-    history = [
-        {"role": m["role"], "content": m["content"]}
-        for m in state.list_chat_messages_for_subject(args.subject_id)
-    ]
-
-    agent = AIAgent(
-        session_id=uuid.uuid4().hex,
-        session_db=SessionDB(),
-        platform="study",
-        enabled_toolsets=[],
-        skip_context_files=True,
-        skip_memory=True,
-        quiet_mode=True,
-    )
 
     try:
+        notes = state.list_notes_for_subject(args.subject_id)
+        system_message = _build_chat_system_message(subject, notes)
+
+        history = [
+            {"role": m["role"], "content": m["content"]}
+            for m in state.list_chat_messages_for_subject(args.subject_id)
+        ]
+
+        agent = AIAgent(
+            session_id=uuid.uuid4().hex,
+            session_db=SessionDB(),
+            platform="study",
+            enabled_toolsets=[],
+            skip_context_files=True,
+            skip_memory=True,
+            quiet_mode=True,
+        )
+
         result = agent.run_conversation(
             user_message=args.message,
             system_message=system_message,
             conversation_history=history,
         )
     except Exception as exc:
-        print(json.dumps({"reply": None, "error": str(exc)}))
+        print(json.dumps({"reply": None, "error": str(exc) or type(exc).__name__}))
         return
 
     if result.get("failed") or result.get("error"):
@@ -242,29 +243,40 @@ def _cmd_chat_turn(args) -> None:
         print(json.dumps({"reply": None, "error": "empty response from model"}))
         return
 
-    state.add_chat_message(args.subject_id, "user", args.message)
-    state.add_chat_message(args.subject_id, "assistant", reply)
+    try:
+        state.add_chat_message(args.subject_id, "user", args.message)
+        state.add_chat_message(args.subject_id, "assistant", reply)
+    except Exception as exc:
+        print(json.dumps({"reply": None, "error": str(exc) or type(exc).__name__}))
+        return
+
     print(json.dumps({"reply": reply, "error": None}))
 
 
 def cmd_study(args) -> None:
     """Dispatch ``hermes study`` subcommands to their handlers."""
     command = getattr(args, "study_command", None)
-    if command == "subject":
-        subject_command = getattr(args, "study_subject_command", None)
-        if subject_command == "create":
-            return _cmd_subject_create(args)
-        if subject_command == "list":
-            return _cmd_subject_list(args)
-        print("Usage: hermes study subject <create|list>")
+    try:
+        if command == "subject":
+            subject_command = getattr(args, "study_subject_command", None)
+            if subject_command == "create":
+                return _cmd_subject_create(args)
+            if subject_command == "list":
+                return _cmd_subject_list(args)
+            print("Usage: hermes study subject <create|list>")
+            sys.exit(1)
+        if command == "ingest":
+            return _cmd_ingest(args)
+        if command == "notes":
+            return _cmd_notes(args)
+        if command == "chat":
+            return _cmd_chat(args)
+        if command == "chat-turn":
+            return _cmd_chat_turn(args)
+        print("Usage: hermes study <subject|ingest|notes|chat>")
         sys.exit(1)
-    if command == "ingest":
-        return _cmd_ingest(args)
-    if command == "notes":
-        return _cmd_notes(args)
-    if command == "chat":
-        return _cmd_chat(args)
-    if command == "chat-turn":
-        return _cmd_chat_turn(args)
-    print("Usage: hermes study <subject|ingest|notes|chat>")
-    sys.exit(1)
+    except Exception as exc:
+        if getattr(args, "json", False):
+            print(json.dumps({"error": str(exc) or type(exc).__name__}))
+            sys.exit(1)
+        raise

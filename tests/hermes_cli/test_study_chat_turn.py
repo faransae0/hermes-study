@@ -105,6 +105,42 @@ def test_chat_turn_exception_persists_nothing(db_path, capsys):
     assert messages == []
 
 
+def test_chat_turn_agent_construction_failure_produces_json_not_crash(db_path, capsys):
+    subject_id = state.create_subject("Physics", db_path=db_path)
+
+    with (
+        patch("hermes_cli.study.AIAgent", side_effect=RuntimeError("No LLM provider configured")),
+        patch("hermes_cli.study.SessionDB"),
+    ):
+        cmd_study(_ns(subject_id=subject_id, message="What is inertia?"))
+
+    out = json.loads(capsys.readouterr().out)
+    assert out == {"reply": None, "error": "No LLM provider configured"}
+
+    messages = state.list_chat_messages_for_subject(subject_id, db_path=db_path)
+    assert messages == []
+
+
+def test_chat_turn_persist_failure_reports_error_not_false_success(db_path, capsys):
+    subject_id = state.create_subject("Physics", db_path=db_path)
+
+    fake_agent = MagicMock()
+    fake_agent.run_conversation.return_value = {
+        "final_response": "Inertia is the tendency to resist changes in motion.",
+        "messages": [],
+    }
+
+    with (
+        patch("hermes_cli.study.AIAgent", return_value=fake_agent),
+        patch("hermes_cli.study.SessionDB"),
+        patch("hermes_cli.study.state.add_chat_message", side_effect=RuntimeError("database is locked")),
+    ):
+        cmd_study(_ns(subject_id=subject_id, message="What is inertia?"))
+
+    out = json.loads(capsys.readouterr().out)
+    assert out == {"reply": None, "error": "database is locked"}
+
+
 def test_chat_turn_reconstructs_history_from_prior_messages(db_path):
     subject_id = state.create_subject("Physics", db_path=db_path)
     state.add_chat_message(subject_id, "user", "What is inertia?", db_path=db_path)
