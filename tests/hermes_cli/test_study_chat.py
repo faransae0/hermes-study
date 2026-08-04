@@ -44,7 +44,7 @@ def test_build_chat_system_message_no_notes_yet():
 
 
 def test_chat_rejects_unknown_subject_id(db_path):
-    with pytest.raises(SystemExit):
+    with patch("hermes_cli.main._require_tty"), pytest.raises(SystemExit):
         cmd_study(_ns(subject_id="nope"))
 
 
@@ -63,6 +63,7 @@ def test_chat_loop_persists_messages_and_exits_on_quit(db_path):
     with (
         patch("hermes_cli.study.AIAgent", return_value=fake_agent) as mock_agent_cls,
         patch("hermes_cli.study.SessionDB"),
+        patch("hermes_cli.main._require_tty"),
         patch("builtins.input", side_effect=["What is inertia?", "exit"]),
     ):
         cmd_study(_ns(subject_id=subject_id))
@@ -108,6 +109,7 @@ def test_chat_loop_passes_system_message_and_grows_history_across_turns(db_path)
     with (
         patch("hermes_cli.study.AIAgent", return_value=fake_agent),
         patch("hermes_cli.study.SessionDB"),
+        patch("hermes_cli.main._require_tty"),
         patch("builtins.input", side_effect=["What is inertia?", "Is that Newton's first law?", "exit"]),
     ):
         cmd_study(_ns(subject_id=subject_id))
@@ -137,6 +139,7 @@ def test_chat_loop_skips_persisting_failed_result(db_path, capsys):
     with (
         patch("hermes_cli.study.AIAgent", return_value=fake_agent),
         patch("hermes_cli.study.SessionDB"),
+        patch("hermes_cli.main._require_tty"),
         patch("builtins.input", side_effect=["What is inertia?", "exit"]),
     ):
         cmd_study(_ns(subject_id=subject_id))
@@ -156,8 +159,89 @@ def test_chat_loop_exits_cleanly_on_eof(db_path):
     with (
         patch("hermes_cli.study.AIAgent") as mock_agent_cls,
         patch("hermes_cli.study.SessionDB"),
+        patch("hermes_cli.main._require_tty"),
         patch("builtins.input", side_effect=EOFError),
     ):
         cmd_study(_ns(subject_id=subject_id))
 
     mock_agent_cls.return_value.run_conversation.assert_not_called()
+
+
+def test_chat_loop_skips_persisting_error_result_without_failed_key(db_path, capsys):
+    """conversation_loop.py can signal a degraded/failed turn via an "error" key
+    without setting "failed" (e.g. content-policy refusals). The guard must
+    catch this shape too, and must not fall back to printing final_response
+    as though it were a normal reply.
+    """
+    subject_id = state.create_subject("Physics", db_path=db_path)
+
+    fake_agent = MagicMock()
+    fake_agent.run_conversation.return_value = {
+        "error": "content policy violation",
+        "final_response": "I can't help with that.",
+        "messages": [],
+    }
+
+    with (
+        patch("hermes_cli.study.AIAgent", return_value=fake_agent),
+        patch("hermes_cli.study.SessionDB"),
+        patch("hermes_cli.main._require_tty"),
+        patch("builtins.input", side_effect=["What is inertia?", "exit"]),
+    ):
+        cmd_study(_ns(subject_id=subject_id))
+
+    out = capsys.readouterr().out
+    assert "content policy violation" in out
+
+    messages = state.list_chat_messages_for_subject(subject_id, db_path=db_path)
+    # only the user turn is persisted; no assistant row for the error turn
+    assert [m["role"] for m in messages] == ["user"]
+
+
+def test_chat_loop_handles_none_final_response_without_failed_or_error_key(db_path, capsys):
+    """conversation_loop.py:3101's "truncated after 4 continuation attempts"
+    path can return final_response=None with neither "failed" nor "error"
+    set. Persisting None would violate chat_messages.content TEXT NOT NULL
+    and raise sqlite3.IntegrityError outside the try/except, crashing the
+    REPL — this must be caught by the empty-reply guard instead.
+    """
+    subject_id = state.create_subject("Physics", db_path=db_path)
+
+    fake_agent = MagicMock()
+    fake_agent.run_conversation.return_value = {
+        "final_response": None,
+        "messages": [],
+    }
+
+    with (
+        patch("hermes_cli.study.AIAgent", return_value=fake_agent),
+        patch("hermes_cli.study.SessionDB"),
+        patch("hermes_cli.main._require_tty"),
+        patch("builtins.input", side_effect=["What is inertia?", "exit"]),
+    ):
+        cmd_study(_ns(subject_id=subject_id))
+
+    out = capsys.readouterr().out
+    assert "[chat error:" in out
+
+    messages = state.list_chat_messages_for_subject(subject_id, db_path=db_path)
+    # only the user turn is persisted; no assistant row for the empty reply
+    assert [m["role"] for m in messages] == ["user"]
+
+
+def test_chat_requires_tty_before_any_agent_work(db_path):
+    """hermes study chat must call main._require_tty before doing any agent
+    setup, so a non-interactive invocation (piped stdin, subprocess, cron)
+    fails fast with a clear error instead of hitting EOFError on the first
+    input() call and silently exiting 0.
+    """
+    subject_id = state.create_subject("Physics", db_path=db_path)
+
+    with (
+        patch("hermes_cli.study.AIAgent") as mock_agent_cls,
+        patch("hermes_cli.main._require_tty", side_effect=SystemExit(1)),
+        pytest.raises(SystemExit),
+    ):
+        cmd_study(_ns(subject_id=subject_id))
+
+    mock_agent_cls.assert_not_called()

@@ -88,6 +88,10 @@ def _build_chat_system_message(subject: dict, notes: list[dict]) -> str:
 
 
 def _cmd_chat(args) -> None:
+    from hermes_cli.main import _require_tty
+
+    _require_tty("study chat")
+
     subject = _require_subject(args.subject_id)
     notes = state.list_notes_for_subject(args.subject_id)
     system_message = _build_chat_system_message(subject, notes)
@@ -138,11 +142,15 @@ def _cmd_chat(args) -> None:
             print(f"[chat error: {exc}]")
             continue
 
-        if result.get("failed"):
-            print(f"[chat error: {result.get('error') or result.get('final_response') or 'request failed'}]")
+        if result.get("failed") or result.get("error"):
+            print(f"[chat error: {result.get('error') or 'request failed'}]")
             continue
 
-        reply = result.get("final_response", "")
+        reply = result.get("final_response") or ""
+        if not reply:
+            print("[chat error: empty response from model]")
+            continue
+
         print(reply)
         state.add_chat_message(args.subject_id, "assistant", reply)
         conversation_history = result.get("messages", conversation_history)

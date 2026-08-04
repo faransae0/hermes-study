@@ -38,6 +38,7 @@ hermes [global-options] <command> [subcommand/options]
 | Command | Purpose |
 |---------|---------|
 | `hermes chat` | Interactive or one-shot chat with the agent. |
+| `hermes study` | Collect study sources (web, PDF, YouTube) into Subjects, generate notes from them, and chat grounded in those notes. Subcommands: `subject create`/`subject list`, `ingest`, `notes`, `chat`. |
 | `hermes model` | Interactively choose the default provider and model. |
 | `hermes moa` | Configure named Mixture of Agents presets selectable from the model picker. |
 | `hermes fallback` | Manage fallback providers tried when the primary model errors. |
