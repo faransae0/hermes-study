@@ -13,7 +13,7 @@ from typing import Callable
 _SOURCE_TYPES = ("url", "pdf", "youtube")
 
 
-def build_study_parser(subparsers, *, cmd_study: Callable) -> None:
+def build_study_parser(subparsers, *, cmd_study: Callable, cmd_study_gui: Callable) -> None:
     """Attach the ``study`` subcommand (and its nested subcommands) to ``subparsers``."""
     study_parser = subparsers.add_parser(
         "study",
@@ -128,5 +128,22 @@ def build_study_parser(subparsers, *, cmd_study: Callable) -> None:
     chat_turn_parser.add_argument("--message", required=True, help="The user's message for this turn")
     chat_turn_parser.set_defaults(json=True)
     chat_turn_parser.set_defaults(func=cmd_study)
+
+    # --- desktop -----------------------------------------------------------
+    desktop_parser = study_subparsers.add_parser(
+        "desktop",
+        help="Launch the study-desktop Electron app",
+        description=(
+            "Install dependencies (if needed) and launch apps/study-desktop, a "
+            "minimal Electron app for managing Subjects, sources, notes, and chat. "
+            "Developer-oriented: runs `npm run dev`, no packaged build."
+        ),
+    )
+    desktop_parser.add_argument(
+        "--skip-install",
+        action="store_true",
+        help="Skip the npm install step even if node_modules looks missing",
+    )
+    desktop_parser.set_defaults(func=cmd_study_gui)
 
     study_parser.set_defaults(func=cmd_study)

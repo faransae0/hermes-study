@@ -10497,6 +10497,36 @@ def cmd_study(args):
     _impl(args)
 
 
+def cmd_study_gui(args: argparse.Namespace) -> None:
+    """Install deps (if needed) and launch the study-desktop Electron app."""
+    study_desktop_dir = PROJECT_ROOT / "apps" / "study-desktop"
+    if not (study_desktop_dir / "package.json").exists():
+        print(f"study-desktop source not found at: {study_desktop_dir}")
+        sys.exit(1)
+
+    npm = _resolve_node_runtime_npm()
+    if not npm:
+        print("hermes study desktop requires Node.js/npm, but npm was not found on PATH.")
+        sys.exit(1)
+
+    node_modules_present = (PROJECT_ROOT / "node_modules" / "electron").exists()
+    if not getattr(args, "skip_install", False) and not node_modules_present:
+        print("→ Installing study-desktop dependencies...")
+        install_result = _run_npm_install_deterministic(
+            npm, PROJECT_ROOT, extra_args=("--workspace", "apps/study-desktop")
+        )
+        if install_result.returncode != 0:
+            print("✗ study-desktop dependency install failed")
+            print(f"  Run manually:  npm install --workspace apps/study-desktop")
+            sys.exit(install_result.returncode or 1)
+
+    from hermes_constants import with_hermes_node_path
+
+    env = with_hermes_node_path()
+    env["HERMES_STUDY_PYTHON"] = sys.executable
+    subprocess.run(["npm", "run", "dev"], cwd=study_desktop_dir, env=env, check=False)
+
+
 def cmd_gateway_enroll(args):
     """Enroll a self-hosted gateway with a relay connector."""
     from hermes_cli.gateway_enroll import cmd_gateway_enroll as _impl
@@ -12406,7 +12436,7 @@ def main():
     # =========================================================================
     # study command  (parser built in hermes_cli/subcommands/study.py)
     # =========================================================================
-    build_study_parser(subparsers, cmd_study=cmd_study)
+    build_study_parser(subparsers, cmd_study=cmd_study, cmd_study_gui=cmd_study_gui)
 
     # =========================================================================
     # Parse and execute

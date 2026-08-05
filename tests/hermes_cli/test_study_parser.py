@@ -11,7 +11,11 @@ def _build_root_parser():
     root = argparse.ArgumentParser(prog="hermes")
     subparsers = root.add_subparsers(dest="command")
     calls = []
-    build_study_parser(subparsers, cmd_study=lambda args: calls.append(args))
+    build_study_parser(
+        subparsers,
+        cmd_study=lambda args: calls.append(args),
+        cmd_study_gui=lambda args: calls.append(args),
+    )
     return root, calls
 
 
@@ -87,6 +91,19 @@ def test_chat_turn_requires_message():
         pass
 
 
+def test_desktop_parses_with_skip_install_flag():
+    root, _ = _build_root_parser()
+    args = root.parse_args(["study", "desktop", "--skip-install"])
+    assert args.study_command == "desktop"
+    assert args.skip_install is True
+
+
+def test_desktop_skip_install_defaults_false():
+    root, _ = _build_root_parser()
+    args = root.parse_args(["study", "desktop"])
+    assert args.skip_install is False
+
+
 def test_all_leaf_commands_set_func_to_cmd_study():
     root, _ = _build_root_parser()
     for argv in (
@@ -96,6 +113,7 @@ def test_all_leaf_commands_set_func_to_cmd_study():
         ["study", "notes", "s1"],
         ["study", "chat", "s1"],
         ["study", "chat-turn", "s1", "--message", "hi"],
+        ["study", "desktop"],
     ):
         args = root.parse_args(argv)
         assert callable(args.func)
