@@ -381,6 +381,7 @@ py-modules = [
   "hermes_state_search",
   "hermes_time",
   "hermes_logging",
+  "study_sm2",
   "study_state",
   "utils",
   "mcp_serve",
