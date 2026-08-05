@@ -47,6 +47,9 @@ async def generate_flashcards(text: str, title: str) -> Dict[str, Any]:
     except (TypeError, ValueError) as exc:
         return {"success": False, "cards": [], "error": f"LLM returned non-JSON: {exc}"}
 
+    if not isinstance(parsed, dict):
+        return {"success": False, "cards": [], "error": "LLM returned non-JSON-object response"}
+
     cards = parsed.get("cards", [])
     if not isinstance(cards, list) or not cards:
         return {"success": False, "cards": [], "error": "LLM returned no flashcards"}
