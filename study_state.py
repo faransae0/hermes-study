@@ -20,7 +20,7 @@ import json
 import os
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -61,6 +61,20 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_chat_messages_subject_id ON chat_messages(subject_id);
+
+CREATE TABLE IF NOT EXISTS flashcards (
+    id TEXT PRIMARY KEY,
+    note_id TEXT NOT NULL REFERENCES notes(id),
+    front TEXT NOT NULL,
+    back TEXT NOT NULL,
+    ease_factor REAL NOT NULL DEFAULT 2.5,
+    interval_days INTEGER NOT NULL DEFAULT 0,
+    repetitions INTEGER NOT NULL DEFAULT 0,
+    next_review_at TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_flashcards_note_id ON flashcards(note_id);
+CREATE INDEX IF NOT EXISTS idx_flashcards_next_review_at ON flashcards(next_review_at);
 """
 
 _INITIALIZED_PATHS: set[str] = set()
@@ -298,3 +312,87 @@ def list_chat_messages_for_subject(
             (subject_id,),
         ).fetchall()
     return [_row_to_chat_message(row) for row in rows]
+
+
+def _row_to_flashcard(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "note_id": row["note_id"],
+        "front": row["front"],
+        "back": row["back"],
+        "ease_factor": row["ease_factor"],
+        "interval_days": row["interval_days"],
+        "repetitions": row["repetitions"],
+        "next_review_at": row["next_review_at"],
+        "created_at": row["created_at"],
+    }
+
+
+def create_flashcards(
+    note_id: str, cards: list[dict[str, str]], *, db_path: Optional[Path] = None
+) -> list[str]:
+    card_ids = [uuid.uuid4().hex for _ in cards]
+    now = _now()
+    with connect_closing(db_path) as conn:
+        conn.execute("DELETE FROM flashcards WHERE note_id = ?", (note_id,))
+        conn.executemany(
+            "INSERT INTO flashcards "
+            "(id, note_id, front, back, ease_factor, interval_days, repetitions, next_review_at, created_at) "
+            "VALUES (?, ?, ?, ?, 2.5, 0, 0, ?, ?)",
+            [
+                (card_id, note_id, card["front"], card["back"], now, now)
+                for card_id, card in zip(card_ids, cards)
+            ],
+        )
+        conn.commit()
+    return card_ids
+
+
+def list_flashcards_for_note(note_id: str, *, db_path: Optional[Path] = None) -> list[dict[str, Any]]:
+    with connect_closing(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM flashcards WHERE note_id = ? ORDER BY created_at ASC", (note_id,)
+        ).fetchall()
+    return [_row_to_flashcard(row) for row in rows]
+
+
+def list_due_flashcards(
+    subject_id: str, *, now: Optional[str] = None, db_path: Optional[Path] = None
+) -> list[dict[str, Any]]:
+    cutoff = now if now is not None else _now()
+    with connect_closing(db_path) as conn:
+        rows = conn.execute(
+            "SELECT flashcards.* FROM flashcards "
+            "JOIN notes ON notes.id = flashcards.note_id "
+            "JOIN sources ON sources.id = notes.source_id "
+            "WHERE sources.subject_id = ? AND flashcards.next_review_at <= ? "
+            "ORDER BY flashcards.next_review_at ASC",
+            (subject_id, cutoff),
+        ).fetchall()
+    return [_row_to_flashcard(row) for row in rows]
+
+
+def record_review(
+    flashcard_id: str, quality: int, *, db_path: Optional[Path] = None
+) -> Optional[dict[str, Any]]:
+    from study_sm2 import compute_sm2_update
+
+    with connect_closing(db_path) as conn:
+        row = conn.execute("SELECT * FROM flashcards WHERE id = ?", (flashcard_id,)).fetchone()
+        if row is None:
+            return None
+
+        new_ease_factor, new_interval_days, new_repetitions = compute_sm2_update(
+            row["ease_factor"], row["interval_days"], row["repetitions"], quality
+        )
+        next_review_at = (datetime.now(timezone.utc) + timedelta(days=new_interval_days)).isoformat()
+
+        conn.execute(
+            "UPDATE flashcards SET ease_factor = ?, interval_days = ?, repetitions = ?, next_review_at = ? "
+            "WHERE id = ?",
+            (new_ease_factor, new_interval_days, new_repetitions, next_review_at, flashcard_id),
+        )
+        conn.commit()
+
+        updated = conn.execute("SELECT * FROM flashcards WHERE id = ?", (flashcard_id,)).fetchone()
+    return _row_to_flashcard(updated)

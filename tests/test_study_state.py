@@ -183,3 +183,94 @@ def test_list_chat_messages_ordered_by_created_at(db_path):
 
     messages = state.list_chat_messages_for_subject(subject_id, db_path=db_path)
     assert [m["content"] for m in messages] == [f"msg {i}" for i in range(5)]
+
+
+def test_create_flashcards_and_list_for_note(db_path):
+    subject_id = state.create_subject("Physics", db_path=db_path)
+    source_id = state.add_source(subject_id, "url", "https://x.com", db_path=db_path)
+    note_id = state.upsert_note(source_id, "**Overview**", ["inertia"], db_path=db_path)
+
+    card_ids = state.create_flashcards(
+        note_id,
+        [{"front": "What is inertia?", "back": "Resistance to changes in motion."}],
+        db_path=db_path,
+    )
+    assert len(card_ids) == 1
+
+    cards = state.list_flashcards_for_note(note_id, db_path=db_path)
+    assert len(cards) == 1
+    assert cards[0]["front"] == "What is inertia?"
+    assert cards[0]["back"] == "Resistance to changes in motion."
+    assert cards[0]["ease_factor"] == 2.5
+    assert cards[0]["interval_days"] == 0
+    assert cards[0]["repetitions"] == 0
+    assert cards[0]["next_review_at"]
+
+
+def test_create_flashcards_replaces_existing_cards_for_note(db_path):
+    subject_id = state.create_subject("Physics", db_path=db_path)
+    source_id = state.add_source(subject_id, "url", "https://x.com", db_path=db_path)
+    note_id = state.upsert_note(source_id, "**Overview**", ["inertia"], db_path=db_path)
+
+    state.create_flashcards(note_id, [{"front": "Q1", "back": "A1"}], db_path=db_path)
+    state.create_flashcards(note_id, [{"front": "Q2", "back": "A2"}], db_path=db_path)
+
+    cards = state.list_flashcards_for_note(note_id, db_path=db_path)
+    assert len(cards) == 1
+    assert cards[0]["front"] == "Q2"
+
+
+def test_list_due_flashcards_only_returns_due_cards(db_path):
+    subject_id = state.create_subject("Physics", db_path=db_path)
+    source_id = state.add_source(subject_id, "url", "https://x.com", db_path=db_path)
+    note_id = state.upsert_note(source_id, "**Overview**", ["inertia"], db_path=db_path)
+    state.create_flashcards(
+        note_id,
+        [{"front": "Q1", "back": "A1"}, {"front": "Q2", "back": "A2"}],
+        db_path=db_path,
+    )
+    cards = state.list_flashcards_for_note(note_id, db_path=db_path)
+
+    from datetime import datetime, timedelta, timezone
+
+    future = (datetime.now(timezone.utc) + timedelta(days=5)).isoformat()
+    with state.connect_closing(db_path) as conn:
+        conn.execute("UPDATE flashcards SET next_review_at = ? WHERE id = ?", (future, cards[1]["id"]))
+        conn.commit()
+
+    due = state.list_due_flashcards(subject_id, db_path=db_path)
+    assert [c["id"] for c in due] == [cards[0]["id"]]
+
+
+def test_list_due_flashcards_isolated_per_subject(db_path):
+    subject_a = state.create_subject("Subject A", db_path=db_path)
+    subject_b = state.create_subject("Subject B", db_path=db_path)
+    source_a = state.add_source(subject_a, "url", "https://a.com", db_path=db_path)
+    source_b = state.add_source(subject_b, "url", "https://b.com", db_path=db_path)
+    note_a = state.upsert_note(source_a, "A", [], db_path=db_path)
+    note_b = state.upsert_note(source_b, "B", [], db_path=db_path)
+    state.create_flashcards(note_a, [{"front": "QA", "back": "AA"}], db_path=db_path)
+    state.create_flashcards(note_b, [{"front": "QB", "back": "AB"}], db_path=db_path)
+
+    due_a = state.list_due_flashcards(subject_a, db_path=db_path)
+    assert [c["front"] for c in due_a] == ["QA"]
+
+
+def test_record_review_applies_sm2_update_and_persists(db_path):
+    subject_id = state.create_subject("Physics", db_path=db_path)
+    source_id = state.add_source(subject_id, "url", "https://x.com", db_path=db_path)
+    note_id = state.upsert_note(source_id, "**Overview**", ["inertia"], db_path=db_path)
+    card_id = state.create_flashcards(note_id, [{"front": "Q1", "back": "A1"}], db_path=db_path)[0]
+
+    updated = state.record_review(card_id, 5, db_path=db_path)
+    assert updated["ease_factor"] == pytest.approx(2.6)
+    assert updated["interval_days"] == 1
+    assert updated["repetitions"] == 1
+
+    persisted = state.list_flashcards_for_note(note_id, db_path=db_path)[0]
+    assert persisted["ease_factor"] == pytest.approx(2.6)
+    assert persisted["repetitions"] == 1
+
+
+def test_record_review_unknown_flashcard_returns_none(db_path):
+    assert state.record_review("nope", 5, db_path=db_path) is None
