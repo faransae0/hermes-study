@@ -10524,7 +10524,7 @@ def cmd_study_gui(args: argparse.Namespace) -> None:
 
     env = with_hermes_node_path()
     env["HERMES_STUDY_PYTHON"] = sys.executable
-    subprocess.run(["npm", "run", "dev"], cwd=study_desktop_dir, env=env, check=False)
+    subprocess.run([npm, "run", "dev"], cwd=study_desktop_dir, env=env, check=False)
 
 
 def cmd_gateway_enroll(args):
