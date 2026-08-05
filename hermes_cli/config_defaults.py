@@ -971,6 +971,21 @@ DEFAULT_CONFIG = {
             "extra_body": {},
             "reasoning_effort": "",  # per-task thinking level: none|minimal|low|medium|high|xhigh|max|ultra (empty = provider default)
         },
+        # Study-desktop flashcard generation — turns a study note's full
+        # content into 3-7 question/answer flashcards for spaced repetition.
+        # Invoked by tools/study_flashcards_tool.py's generate_flashcards()
+        # (a future CLI plan wires this to `hermes study flashcards
+        # generate`). A cheap, fast model is sufficient — single
+        # structured-JSON-output call per note.
+        "study_flashcards": {
+            "provider": "auto",
+            "model": "",
+            "base_url": "",
+            "api_key": "",
+            "timeout": 120,
+            "extra_body": {},
+            "reasoning_effort": "",  # per-task thinking level: none|minimal|low|medium|high|xhigh|max|ultra (empty = provider default)
+        },
         # Kanban decomposer — decomposes a triage task into a graph of
         # child tasks routed to specialist profiles by description.
         # Invoked by ``hermes kanban decompose`` and the kanban
