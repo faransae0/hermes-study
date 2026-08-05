@@ -331,6 +331,8 @@ def _row_to_flashcard(row: sqlite3.Row) -> dict[str, Any]:
 def create_flashcards(
     note_id: str, cards: list[dict[str, str]], *, db_path: Optional[Path] = None
 ) -> list[str]:
+    if not cards:
+        return []
     card_ids = [uuid.uuid4().hex for _ in cards]
     now = _now()
     with connect_closing(db_path) as conn:
@@ -375,6 +377,9 @@ def list_due_flashcards(
 def record_review(
     flashcard_id: str, quality: int, *, db_path: Optional[Path] = None
 ) -> Optional[dict[str, Any]]:
+    if not 0 <= quality <= 5:
+        raise ValueError(f"quality must be between 0 and 5, got {quality!r}")
+
     from study_sm2 import compute_sm2_update
 
     with connect_closing(db_path) as conn:

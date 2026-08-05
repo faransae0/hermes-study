@@ -57,7 +57,11 @@ async def generate_flashcards(text: str, title: str) -> Dict[str, Any]:
     valid_cards = [
         {"front": c["front"], "back": c["back"]}
         for c in cards
-        if isinstance(c, dict) and c.get("front") and c.get("back")
+        if isinstance(c, dict)
+        and isinstance(c.get("front"), str)
+        and isinstance(c.get("back"), str)
+        and c["front"]
+        and c["back"]
     ]
     if not valid_cards:
         return {"success": False, "cards": [], "error": "LLM returned no valid flashcards"}

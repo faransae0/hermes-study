@@ -220,6 +220,20 @@ def test_create_flashcards_replaces_existing_cards_for_note(db_path):
     assert cards[0]["front"] == "Q2"
 
 
+def test_create_flashcards_empty_list_does_not_wipe_existing_cards(db_path):
+    subject_id = state.create_subject("Physics", db_path=db_path)
+    source_id = state.add_source(subject_id, "url", "https://x.com", db_path=db_path)
+    note_id = state.upsert_note(source_id, "**Overview**", ["inertia"], db_path=db_path)
+    state.create_flashcards(note_id, [{"front": "Q1", "back": "A1"}], db_path=db_path)
+
+    result = state.create_flashcards(note_id, [], db_path=db_path)
+
+    assert result == []
+    cards = state.list_flashcards_for_note(note_id, db_path=db_path)
+    assert len(cards) == 1
+    assert cards[0]["front"] == "Q1"
+
+
 def test_list_due_flashcards_only_returns_due_cards(db_path):
     subject_id = state.create_subject("Physics", db_path=db_path)
     source_id = state.add_source(subject_id, "url", "https://x.com", db_path=db_path)
@@ -274,3 +288,55 @@ def test_record_review_applies_sm2_update_and_persists(db_path):
 
 def test_record_review_unknown_flashcard_returns_none(db_path):
     assert state.record_review("nope", 5, db_path=db_path) is None
+
+
+def test_record_review_rejects_out_of_range_quality(db_path):
+    subject_id = state.create_subject("Physics", db_path=db_path)
+    source_id = state.add_source(subject_id, "url", "https://x.com", db_path=db_path)
+    note_id = state.upsert_note(source_id, "**Overview**", ["inertia"], db_path=db_path)
+    card_id = state.create_flashcards(note_id, [{"front": "Q1", "back": "A1"}], db_path=db_path)[0]
+
+    with pytest.raises(ValueError):
+        state.record_review(card_id, 99, db_path=db_path)
+    with pytest.raises(ValueError):
+        state.record_review(card_id, -1, db_path=db_path)
+
+    # The rejected calls must not have mutated the card's scheduling state.
+    unchanged = state.list_flashcards_for_note(note_id, db_path=db_path)[0]
+    assert unchanged["ease_factor"] == 2.5
+    assert unchanged["repetitions"] == 0
+
+
+@pytest.mark.asyncio
+async def test_generate_flashcards_output_feeds_create_flashcards_cleanly(db_path):
+    """Contract test: generate_flashcards()'s success shape is valid create_flashcards() input.
+
+    No task wires these two functions together directly — a future plan does — so this
+    pins the handoff shape now, while both ends are still fresh.
+    """
+    import json
+    from unittest.mock import patch
+
+    from tools.study_flashcards_tool import generate_flashcards
+
+    subject_id = state.create_subject("Physics", db_path=db_path)
+    source_id = state.add_source(subject_id, "url", "https://x.com", db_path=db_path)
+    note_id = state.upsert_note(source_id, "**Overview**", ["inertia"], db_path=db_path)
+
+    fake_llm_json = json.dumps(
+        {"cards": [{"front": "What is inertia?", "back": "Resistance to changes in motion."}, {"front": "Q2", "back": "A2"}]}
+    )
+    fake_message = type("Msg", (), {"content": fake_llm_json})
+    fake_choice = type("Choice", (), {"message": fake_message})
+    fake_response = type("Response", (), {"choices": [fake_choice]})
+
+    with patch("agent.auxiliary_client.call_llm", return_value=fake_response):
+        result = await generate_flashcards("Newton's laws of motion...", "Physics 101")
+
+    assert result["success"] is True
+
+    card_ids = state.create_flashcards(note_id, result["cards"], db_path=db_path)
+    assert len(card_ids) == 2
+
+    persisted = state.list_flashcards_for_note(note_id, db_path=db_path)
+    assert {c["front"] for c in persisted} == {"What is inertia?", "Q2"}

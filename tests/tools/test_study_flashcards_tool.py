@@ -104,6 +104,33 @@ async def test_generate_flashcards_filters_malformed_cards():
 
 
 @pytest.mark.asyncio
+async def test_generate_flashcards_filters_non_string_front_back():
+    fake_message = type(
+        "Msg",
+        (),
+        {
+            "content": json.dumps(
+                {
+                    "cards": [
+                        {"front": "Valid Q", "back": "Valid A"},
+                        {"front": 123, "back": "numeric front"},
+                        {"front": "nested back", "back": {"a": 1}},
+                    ]
+                }
+            )
+        },
+    )
+    fake_choice = type("Choice", (), {"message": fake_message})
+    fake_response = type("Response", (), {"choices": [fake_choice]})
+
+    with patch("agent.auxiliary_client.call_llm", return_value=fake_response):
+        result = await generate_flashcards("some text", "Some Title")
+
+    assert result["success"] is True
+    assert result["cards"] == [{"front": "Valid Q", "back": "Valid A"}]
+
+
+@pytest.mark.asyncio
 async def test_generate_flashcards_llm_returns_non_object_json():
     fake_message = type("Msg", (), {"content": "42"})
     fake_choice = type("Choice", (), {"message": fake_message})
