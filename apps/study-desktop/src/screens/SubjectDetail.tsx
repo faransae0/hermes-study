@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { StudyNote } from '../types/hermes-study'
+import ChatPanel from './ChatPanel'
 
 interface SubjectDetailProps {
   subjectId: string
@@ -144,7 +145,7 @@ export default function SubjectDetail({ subjectId, onBack }: SubjectDetailProps)
         </div>
       )}
 
-      {activeTab === 'chat' && <p className="text-neutral-500">Chat tab (coming in Task 6)</p>}
+      {activeTab === 'chat' && <ChatPanel subjectId={subjectId} />}
     </div>
   )
 }

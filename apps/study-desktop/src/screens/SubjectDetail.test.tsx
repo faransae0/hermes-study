@@ -82,3 +82,14 @@ test('the back button calls onBack', async () => {
   fireEvent.click(screen.getByText(/back to subjects/i))
   expect(onBack).toHaveBeenCalled()
 })
+
+test('switching to the Chat tab renders the chat panel', async () => {
+  ;(window.hermesStudy.notesList as any).mockResolvedValue([])
+
+  render(<SubjectDetail subjectId="s1" onBack={() => {}} />)
+  await waitFor(() => screen.getByText(/no notes yet/i))
+
+  fireEvent.click(screen.getByRole('button', { name: /^chat$/i }))
+
+  expect(screen.getByLabelText(/message/i)).toBeTruthy()
+})
